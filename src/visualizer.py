@@ -126,39 +126,57 @@ def _draw_bbox_corners(img, cx0, cy0, cx1, cy1, color, length=28, thick=5):
         cv2.line(img, corner, v_pt, color, thick, cv2.LINE_AA)
 
 
-def _draw_grid(out, x0, y0, x1, y1, target=-1, dwell=0, color=(200, 200, 200)):
-    """Draw 3x3 grid with cell numbers; highlight target cell with bbox."""
+def _draw_grid(out, x0, y0, x1, y1, target=-1, dwell=0, color=(200, 200, 200), hit_cell=-1):
+    """Draw 3x3 grid with cell numbers; highlight target (yellow) and just-hit cell (green)."""
     cw = max((x1 - x0) // 3, 1)
     ch = max((y1 - y0) // 3, 1)
 
-    # Target cell fill
-    if target >= 0:
+    # 1. Hit cell — solid green fill at 60 % opacity
+    if hit_cell >= 0:
+        row, col = divmod(hit_cell, 3)
+        hx0, hy0 = x0 + col * cw, y0 + row * ch
+        hx1, hy1 = hx0 + cw, hy0 + ch
+        ov = out.copy()
+        cv2.rectangle(ov, (hx0, hy0), (hx1, hy1), _FLASH_GREEN, -1)
+        cv2.addWeighted(ov, 0.60, out, 0.40, 0, out)
+
+    # 2. Target fill (yellow) — skip if it is the same cell as the hit
+    if target >= 0 and target != hit_cell:
         row, col = divmod(target, 3)
         cx0, cy0 = x0 + col * cw, y0 + row * ch
         cx1, cy1 = cx0 + cw, cy0 + ch
         alpha = 0.20 + min(dwell / 3, 1.0) * 0.35
-        overlay = out.copy()
-        cv2.rectangle(overlay, (cx0, cy0), (cx1, cy1), _TARGET_COLOR, -1)
-        cv2.addWeighted(overlay, alpha, out, 1 - alpha, 0, out)
+        ov = out.copy()
+        cv2.rectangle(ov, (cx0, cy0), (cx1, cy1), _TARGET_COLOR, -1)
+        cv2.addWeighted(ov, alpha, out, 1 - alpha, 0, out)
 
-    # Grid lines
+    # 3. Grid lines
     for i in range(1, 3):
         cv2.line(out, (x0 + i * cw, y0), (x0 + i * cw, y1), color, 2, cv2.LINE_AA)
         cv2.line(out, (x0, y0 + i * ch), (x1, y0 + i * ch), color, 2, cv2.LINE_AA)
 
-    # Cell numbers 1–9 (dim in non-target cells, bright in target cell)
+    # 4. Cell numbers — white on hit cell, yellow on target, gray elsewhere
     for cell in range(9):
         row, col = divmod(cell, 3)
         ccx = x0 + col * cw + cw // 2
         ccy = y0 + row * ch + ch // 2
-        is_target = (cell == target)
-        label_color = (0, 255, 0) if is_target else (180, 180, 180)
-        scale = 1.8 if is_target else 0.8
-        thick = 3 if is_target else 1
+        if cell == hit_cell:
+            label_color, scale, thick = (255, 255, 255), 1.8, 3
+        elif cell == target and cell != hit_cell:
+            label_color, scale, thick = _TARGET_COLOR, 1.8, 3
+        else:
+            label_color, scale, thick = (180, 180, 180), 0.8, 1
         _put_text_centered(out, str(cell + 1), ccx, ccy, scale, label_color, thick)
 
-    # Bounding-box on target cell: thick border + corner marks
-    if target >= 0:
+    # 5. Borders + corner marks
+    if hit_cell >= 0:
+        row, col = divmod(hit_cell, 3)
+        hx0, hy0 = x0 + col * cw, y0 + row * ch
+        hx1, hy1 = hx0 + cw, hy0 + ch
+        cv2.rectangle(out, (hx0, hy0), (hx1, hy1), _FLASH_GREEN, 4)
+        _draw_bbox_corners(out, hx0, hy0, hx1, hy1, (0, 255, 100), length=32, thick=5)
+
+    if target >= 0 and target != hit_cell:
         row, col = divmod(target, 3)
         cx0, cy0 = x0 + col * cw, y0 + row * ch
         cx1, cy1 = cx0 + cw, cy0 + ch
@@ -221,20 +239,24 @@ def draw_overlay(
     x0, y0 = 0, 0
     x1, y1 = W, H
 
-    # Flash overlay
-    if state and state.flash_frames > 0 and state.flash_color != "none":
-        flash_col = _FLASH_GREEN if state.flash_color == "green" else _FLASH_RED
-        overlay = out.copy()
-        cv2.rectangle(overlay, (0, 0), (W, H), flash_col, -1)
-        cv2.addWeighted(overlay, 0.28, out, 0.72, 0, out)
+    # Full-screen flash only for miss/timeout (red); hits are shown as cell highlight
+    if state and state.flash_frames > 0 and state.flash_color == "red":
+        ov = out.copy()
+        cv2.rectangle(ov, (0, 0), (W, H), _FLASH_RED, -1)
+        cv2.addWeighted(ov, 0.28, out, 0.72, 0, out)
 
     # Body overlays (pose, hands, face) drawn before grid so grid renders on top
     draw_body_overlays(out, pose_landmarks, right_hand_landmarks, left_hand_landmarks, face_landmarks)
 
-    # 3x3 grid with cell numbers
+    # 3x3 grid with cell numbers; pass hit_cell to highlight just the reached cell in green
     target = state.current_target if state else -1
     dwell = state.dwell_count if state else 0
-    _draw_grid(out, x0, y0, x1, y1, target=target, dwell=dwell)
+    hit_cell = (
+        state.last_target
+        if (state and state.flash_frames > 0 and state.flash_color == "green")
+        else -1
+    )
+    _draw_grid(out, x0, y0, x1, y1, target=target, dwell=dwell, hit_cell=hit_cell)
 
     # Hand dots with labels
     for pos, dot_color, label in [

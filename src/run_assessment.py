@@ -16,6 +16,7 @@ if _project_root not in sys.path:
 
 import argparse
 import copy
+import ctypes
 import pickle
 import time
 import winsound
@@ -30,6 +31,16 @@ def _loading_frame(msg: str) -> np.ndarray:
     return img
 
 
+def _set_topmost(title: str) -> None:
+    """Pin the cv2 window to always-on-top using the Win32 API."""
+    hwnd = ctypes.windll.user32.FindWindowW(None, title)
+    if hwnd:
+        HWND_TOPMOST = -1
+        SWP_NOMOVE   = 0x0002
+        SWP_NOSIZE   = 0x0001
+        ctypes.windll.user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--duration",  type=int,   required=True)
@@ -40,14 +51,17 @@ def main() -> None:
     parser.add_argument("--stopfile",              required=True)
     args = parser.parse_args()
 
-    _TITLE      = "Assessment — Live View"
-    _COUNTDOWN  = 3.0
+    _TITLE     = "Assessment — Live View"
+    _COUNTDOWN = 3.0
 
-    # ── Show a window immediately (before heavy imports load) ────────────────
+    # ── Show window immediately (before heavy imports) ───────────────────────
     cv2.namedWindow(_TITLE, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(_TITLE, 960, 720)
     cv2.imshow(_TITLE, _loading_frame("Loading camera..."))
     cv2.waitKey(1)
+
+    # Fullscreen + always-on-top
+    cv2.setWindowProperty(_TITLE, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    _set_topmost(_TITLE)
 
     # ── Heavy imports (MediaPipe models load here) ───────────────────────────
     from src.tracker import HandTracker, compute_grid_bounds_with_shape
@@ -94,6 +108,17 @@ def main() -> None:
             frame_bgr = cv2.flip(frame_bgr, 1)   # selfie / mirror view
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             tracking  = tracker.process(frame_rgb)
+
+            # Fix 1 — swap right/left so labels match what the person sees in the
+            # selfie mirror (cv2.VideoCapture returns non-mirrored frames; after the
+            # flip, MediaPipe handedness is reversed relative to the person's body).
+            tracking.right_hand_pos, tracking.left_hand_pos = (
+                tracking.left_hand_pos, tracking.right_hand_pos
+            )
+            tracking.right_hand_landmarks, tracking.left_hand_landmarks = (
+                tracking.left_hand_landmarks, tracking.right_hand_landmarks
+            )
+
             grid_bounds = compute_grid_bounds_with_shape(tracking.shoulders, frame_bgr.shape)
             now = time.perf_counter()
 
@@ -133,9 +158,26 @@ def main() -> None:
                 )
                 if result.event == "hit":
                     winsound.PlaySound("SystemAsterisk", winsound.SND_ALIAS | winsound.SND_ASYNC)
+
                 if state.phase == "done":
-                    cv2.imshow(_TITLE, out)
-                    cv2.waitKey(800)   # linger so user sees the "done" overlay
+                    # ── Finish screen (Fix 4) ─────────────────────────────────
+                    H_f, W_f = out.shape[:2]
+                    finish = out.copy()
+                    dark = np.zeros_like(finish)
+                    cv2.addWeighted(dark, 0.65, finish, 0.35, 0, finish)
+
+                    t1, s1, k1 = "Finish!", 5.0, 8
+                    (tw1, th1), _ = cv2.getTextSize(t1, cv2.FONT_HERSHEY_SIMPLEX, s1, k1)
+                    cv2.putText(finish, t1, ((W_f - tw1) // 2, H_f // 2 - 20),
+                                cv2.FONT_HERSHEY_SIMPLEX, s1, (0, 255, 100), k1, cv2.LINE_AA)
+
+                    t2, s2, k2 = "Thank You", 2.5, 4
+                    (tw2, _th2), _ = cv2.getTextSize(t2, cv2.FONT_HERSHEY_SIMPLEX, s2, k2)
+                    cv2.putText(finish, t2, ((W_f - tw2) // 2, H_f // 2 + th1 + 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, s2, (255, 255, 255), k2, cv2.LINE_AA)
+
+                    cv2.imshow(_TITLE, finish)
+                    cv2.waitKey(2000)
                     break
 
             else:
