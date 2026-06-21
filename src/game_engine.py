@@ -100,17 +100,19 @@ class GameEngine:
             result.hit_count = _count_hits(state.events)
             return state, result
 
+        # Compute current cell for each hand (used for hit detection AND target exclusion)
+        r_cell = cell_from_normalized(right_pos, grid_bounds) if right_pos else -1
+        l_cell = cell_from_normalized(left_pos, grid_bounds) if left_pos else -1
+
         # Check hand in target cell
         if state.hand_side == "both":
-            r_cell = cell_from_normalized(right_pos, grid_bounds) if right_pos else -1
-            l_cell = cell_from_normalized(left_pos, grid_bounds) if left_pos else -1
             r_hit = r_cell == state.current_target
             l_hit = l_cell == state.current_target
             in_target = r_hit or l_hit
             active_hand = "right" if r_hit else ("left" if l_hit else active_hand)
         else:
-            current_cell = cell_from_normalized(active_pos, grid_bounds) if active_pos else -1
-            in_target = current_cell == state.current_target
+            active_cell = r_cell if state.hand_side == "right" else l_cell
+            in_target = active_cell == state.current_target
 
         if in_target:
             state.dwell_count += 1
@@ -119,12 +121,15 @@ class GameEngine:
 
         result.dwell_count = state.dwell_count
 
+        # Cells currently occupied by either hand — next target will avoid these
+        hand_cells = {c for c in (r_cell, l_cell) if c >= 0}
+
         # Hit registered
         if state.dwell_count >= MIN_DWELL_FRAMES:
             _record_event(state, success=True, hit_time=frame_time, hand=active_hand,
                           frame_time=frame_time)
             state.last_target = state.current_target
-            state.current_target = _select_next_target(state.last_target)
+            state.current_target = _select_next_target(state.last_target, hand_cells)
             state.target_start_time = frame_time
             state.dwell_count = 0
             state.flash_frames = 5
@@ -139,7 +144,7 @@ class GameEngine:
             _record_event(state, success=False, hit_time=None, hand=active_hand,
                           frame_time=frame_time)
             state.last_target = state.current_target
-            state.current_target = _select_next_target(state.last_target)
+            state.current_target = _select_next_target(state.last_target, hand_cells)
             state.target_start_time = frame_time
             state.dwell_count = 0
             state.flash_frames = 3
@@ -152,12 +157,21 @@ class GameEngine:
         return state, result
 
 
-def _select_next_target(last: int) -> int:
+def _select_next_target(last: int, occupied: set | None = None) -> int:
+    """Pick a random target cell, excluding the last target and any cell a hand is in."""
     weights = list(_CELL_WEIGHTS)
     if last >= 0:
         weights[last] = 0.0
-    cells = list(range(9))
-    return random.choices(cells, weights=weights, k=1)[0]
+    if occupied:
+        for c in occupied:
+            if 0 <= c <= 8:
+                weights[c] = 0.0
+    # Safety fallback: if every cell was zeroed out, reset to avoid random.choices failing
+    if not any(weights):
+        weights = list(_CELL_WEIGHTS)
+        if last >= 0:
+            weights[last] = 0.0
+    return random.choices(range(9), weights=weights, k=1)[0]
 
 
 def _get_active_pos(hand_side: str, right_pos, left_pos):

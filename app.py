@@ -42,8 +42,19 @@ _engine = GameEngine()
 _COUNTDOWN_S = 3  # seconds of "3-2-1" before test starts
 
 
+def _bgr_to_gradio(bgr_frame: np.ndarray) -> np.ndarray:
+    """Convert an BGR overlay frame to the RGB format Gradio expects.
+
+    Gradio's webcam Image component applies CSS scaleX(-1) to the displayed
+    element, which would double-flip our Python-mirrored frame and produce a
+    non-mirrored display.  We flip back to raw orientation here so that
+    Gradio's single CSS flip delivers the correct selfie/mirror view.
+    """
+    return cv2.cvtColor(cv2.flip(bgr_frame, 1), cv2.COLOR_BGR2RGB)
+
+
 def _make_done(state, frame_bgr, grid_bounds, pose_ok, tracking):
-    """Transition state to done and return preview frame (BGR in, RGB out for Gradio)."""
+    """Transition state to done and return preview frame."""
     _stop_event.clear()
     s = copy.copy(state) if state is not None else state
     if s is not None:
@@ -54,7 +65,7 @@ def _make_done(state, frame_bgr, grid_bounds, pose_ok, tracking):
         tracking.pose_landmarks, tracking.right_hand_landmarks,
         tracking.left_hand_landmarks, tracking.face_landmarks,
     )
-    return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), s, gr.update(), gr.update(), gr.update()
+    return _bgr_to_gradio(out), s, gr.update(), gr.update(), gr.update()
 
 
 def unified_stream(frame: np.ndarray, state: GameState):
@@ -64,11 +75,12 @@ def unified_stream(frame: np.ndarray, state: GameState):
         if frame is None or not isinstance(frame, np.ndarray):
             return _no_update
 
-        frame = cv2.flip(frame, 1)  # mirror → selfie view
-        # Gradio delivers RGB frames; MediaPipe expects RGB so pass frame as-is to tracker.
-        # Convert to BGR for OpenCV drawing functions, then back to RGB for Gradio output.
+        # Flip for selfie/mirror-view processing; all coordinates and cell detection
+        # use this mirrored space.  _bgr_to_gradio() flips back before returning so
+        # Gradio's CSS scaleX(-1) on the webcam element gives the final mirror display.
+        frame = cv2.flip(frame, 1)
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        tracking = _tracker.process(frame)  # RGB → MediaPipe
+        tracking = _tracker.process(frame)  # MediaPipe expects RGB
         grid_bounds = compute_grid_bounds_with_shape(tracking.shoulders, frame.shape)
         pose_ok = tracking.shoulders is not None
         now = time.perf_counter()
@@ -91,7 +103,7 @@ def unified_stream(frame: np.ndarray, state: GameState):
                 int(remaining) + 1 if remaining > 0 else 0,
                 tracking.right_hand_landmarks, tracking.left_hand_landmarks, tracking.face_landmarks,
             )
-            return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), state, gr.update(), gr.update(), gr.update()
+            return _bgr_to_gradio(out), state, gr.update(), gr.update(), gr.update()
 
         # ── Preview (idle / analyzed) ────────────────────────────────────────
         if state is None or state.phase not in ("running", "done"):
@@ -100,7 +112,7 @@ def unified_stream(frame: np.ndarray, state: GameState):
                 tracking.pose_landmarks, tracking.right_hand_landmarks,
                 tracking.left_hand_landmarks, tracking.face_landmarks,
             )
-            return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), state, gr.update(), gr.update(), gr.update()
+            return _bgr_to_gradio(out), state, gr.update(), gr.update(), gr.update()
 
         # ── Running ──────────────────────────────────────────────────────────
         if state.phase == "running":
@@ -118,7 +130,7 @@ def unified_stream(frame: np.ndarray, state: GameState):
                 tracking.left_hand_landmarks, tracking.face_landmarks,
             )
             target_name = CELL_NAMES.get(state.current_target, "—")
-            return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), state, float(result.remaining_s), int(result.hit_count), target_name
+            return _bgr_to_gradio(out), state, float(result.remaining_s), int(result.hit_count), target_name
 
         # ── Done (waiting for poll_timer) ────────────────────────────────────
         out = draw_preview_overlay(
@@ -126,7 +138,7 @@ def unified_stream(frame: np.ndarray, state: GameState):
             tracking.pose_landmarks, tracking.right_hand_landmarks,
             tracking.left_hand_landmarks, tracking.face_landmarks,
         )
-        return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), state, gr.update(), gr.update(), gr.update()
+        return _bgr_to_gradio(out), state, gr.update(), gr.update(), gr.update()
 
     except Exception:
         import traceback

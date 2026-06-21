@@ -126,15 +126,16 @@ class HandTracker:
             pose_res = self._pose_lm.detect(mp_image)
             face_res = self._face_lm.detect(mp_image)
 
-        # Map hands to person-anatomical left/right.
-        # The frame is selfie-mirrored before being passed here, so the Tasks API's
-        # perspective-based handedness label is flipped: model "Left" = person's right.
+        # The frame is selfie-mirrored (Python flip applied in app.py before this call).
+        # HandLandmarker classifies by image-position: "Right" = hand on the right side
+        # of the image.  In a selfie-mirrored frame person's right hand IS on the right
+        # side, so the label maps directly — no swap needed.
         right_lm, left_lm = None, None
         for i, lm_list in enumerate(hand_res.hand_landmarks):
             label = hand_res.handedness[i][0].category_name
-            if label == "Left":   # mirrored image → person's right hand
+            if label == "Right":
                 right_lm = lm_list
-            else:                  # mirrored image → person's left hand
+            else:
                 left_lm = lm_list
 
         pose_lm = pose_res.pose_landmarks[0] if pose_res.pose_landmarks else None
