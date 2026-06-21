@@ -7,7 +7,7 @@ from plotly.subplots import make_subplots
 from src.tracker import CELL_NAMES
 
 _GRID_COLOR = (255, 255, 255)
-_TARGET_COLOR = (0, 255, 0)
+_TARGET_COLOR = (0, 255, 255)   # yellow (BGR)
 _FLASH_GREEN = (0, 200, 0)
 _FLASH_RED = (0, 0, 220)
 _HUD_COLOR = (255, 255, 255)
@@ -163,7 +163,7 @@ def _draw_grid(out, x0, y0, x1, y1, target=-1, dwell=0, color=(200, 200, 200)):
         cx0, cy0 = x0 + col * cw, y0 + row * ch
         cx1, cy1 = cx0 + cw, cy0 + ch
         cv2.rectangle(out, (cx0, cy0), (cx1, cy1), _TARGET_COLOR, 3)
-        _draw_bbox_corners(out, cx0, cy0, cx1, cy1, (255, 255, 0), length=32, thick=5)
+        _draw_bbox_corners(out, cx0, cy0, cx1, cy1, (0, 200, 255), length=32, thick=5)
 
 
 def draw_countdown_overlay(
