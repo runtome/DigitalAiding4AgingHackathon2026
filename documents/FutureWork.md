@@ -69,3 +69,12 @@
 - Add anonymized participant IDs for research trials.
 - Document privacy considerations for webcam-based assessment data.
 - Consider options for local-only data storage and controlled export.
+
+## 11. Strengthen Cybersecurity and Standards Alignment
+
+- Review the application against OWASP guidance, including secure handling of user input, local file exports, dependency risks, and web UI exposure.
+- Check third-party package vulnerabilities regularly and define an update process for security patches.
+- Review secure software development practices against relevant standards such as ISO/IEC 27001 for information security management and ISO/IEC 27002 for security controls.
+- Consider ISO/IEC 27701 for privacy information management if participant data is stored, shared, or used for research.
+- If the tool moves toward medical or clinical use, investigate applicable medical software and risk-management standards such as IEC 62304 and ISO 14971.
+- Document cybersecurity assumptions, known risks, mitigation plans, and responsibilities before any real-world deployment.
