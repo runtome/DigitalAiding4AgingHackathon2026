@@ -141,9 +141,9 @@ Weighted blend of three sub-scores:
 Quality = 0.4 × PathEfficiency + 0.4 × JerkScore + 0.2 × (100 − TremorPower)
 ```
 
-- **Path Efficiency** — ratio of direct distance to actual path length (1.0 = perfectly straight)
-- **Jerk Score** — smoothness based on Normalized Jerk Score (NJS); lower jerk → higher score
-- **Tremor Power** — FFT energy in the 3–7 Hz band as % of total signal power
+- **Path Efficiency** — ratio of direct distance to actual path length, displayed as 0–100% (100% = perfectly straight)
+- **Jerk Score** — smoothness from Dimensionless Jerk (NJS) computed on Savitzky-Golay-smoothed trajectory; lower NJS → higher score (0–100)
+- **Tremor Power** — FFT energy in the 4.5–7 Hz band as % of total power; only computed for reaches lasting ≥ 1.5 s (shorter reaches return 0 — too few FFT points for reliable frequency resolution)
 
 ### 4. Composite Score (0–100)
 
