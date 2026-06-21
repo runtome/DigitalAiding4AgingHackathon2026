@@ -93,11 +93,9 @@ class GameEngine:
             if len(state.trajectory_buffer) > 100:
                 state.trajectory_buffer = state.trajectory_buffer[-100:]
 
-        # Check game over
+        # Check game over — do NOT record the interrupted last target as a miss
         if elapsed >= state.duration_s:
             state.phase = "done"
-            _record_event(state, success=False, hit_time=None, hand=active_hand,
-                          frame_time=frame_time)
             result.event = "game_over"
             result.hit_count = _count_hits(state.events)
             return state, result

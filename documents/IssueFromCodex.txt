@@ -1,0 +1,626 @@
+ ▐▛███▜▌   Claude Code v2.1.183
+▝▜█████▛▘  Sonnet 4.6 · Claude Pro
+  ▘▘ ▝▝    D:\github\DigitalAiding4AgingHackathon2026
+
+
+❯ Please correct following issue                                                
+    Main Findings                                                               
+                                                                                
+    1. Encoding is broken in comments, UI text, and docs                        
+       Many Thai characters, arrows, emoji, and box-drawing comments display as 
+  mojibake like â€”, ðŸ“Š, à¸.... This                                          
+       affects /D:/github/DigitalAiding4AgingHackathon2026/README.md:1,         
+  /D:/github/DigitalAiding4AgingHackathon2026/                                  
+       CLAUDE.md:1, /D:/github/DigitalAiding4AgingHackathon2026/app.py:1, and   
+  /D:/github/DigitalAiding4AgingHackathon2026/                                  
+       src/visualizer.py:1.                                                     
+       Solution: save files as UTF-8 and replace corrupted text from the        
+  original Thai/English source. If no original                                  
+       exists, rewrite UI labels and comments in clean UTF-8 or plain ASCII.    
+                                                                                
+    2. HandTracker.process() naming is misleading                               
+       In /D:/github/DigitalAiding4AgingHackathon2026/src/tracker.py:28, the    
+  parameter is named frame_rgb, but /D:/github/                                 
+       DigitalAiding4AgingHackathon2026/app.py:42 passes an OpenCV/Gradio frame 
+  after cv2.flip. MediaPipe usually expects                                     
+       RGB images. If Gradio gives RGB, this is okay, but the OpenCV drawing    
+  code treats frames as BGR-style color tuples.                                 
+       Solution: explicitly document and enforce frame color format. Convert    
+  with cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)                                   
+       only if needed, but first confirm Gradio’s webcam frame format.          
+                                                                                
+    3. Single-hand assessments produce misleading LNU/dominance results         
+       If the user selects only right hand, left-hand metrics remain zero, so   
+  dominance and LNU comparisons can look                                        
+       clinically meaningful even though only one hand was tested. This affects 
+  /D:/github/                                                                   
+       DigitalAiding4AgingHackathon2026/src/motion_analyzer.py:63.              
+       Solution: only calculate LNU and dominance when both hands have enough   
+  valid events. Otherwise show “Not enough                                      
+       bilateral data”.                                                         
+                                                                                
+    4. “Both Hands” mode is not a controlled clinical comparison                
+       In /D:/github/DigitalAiding4AgingHackathon2026/src/game_engine.py:82,    
+  either hand can hit any target. This measures                                 
+       free-choice behavior more than true left/right ability. A user may       
+  naturally prefer one hand, which increases LNU                                
+       risk even without impairment.                                            
+       Solution: add separate modes: Right only, Left only, and                 
+  Alternating/balanced both hands. For LNU, require balanced                    
+       target counts per hand.                                                  
+                                                                                
+    5. Final timeout/game-over records an extra failed event                    
+       When duration ends,                                                      
+  /D:/github/DigitalAiding4AgingHackathon2026/src/game_engine.py:72 records a   
+  failed event even                                                             
+       if the last target simply expired because the whole test ended. This may 
+  reduce accuracy unfairly.                                                     
+       Solution: decide whether an unfinished final target should count as a    
+  miss. For clinical scoring, it may be better                                  
+       to exclude incomplete final trials.                                      
+                                                                                
+    6. Grid ignores body position                                               
+       compute_grid_bounds() says the grid is full-frame, independent of        
+  shoulders, in /D:/github/                                                     
+       DigitalAiding4AgingHackathon2026/src/tracker.py:64. That is simple, but  
+  if the participant stands off-center or                                       
+       camera angle changes, target difficulty changes.                         
+       Solution: use shoulder/body landmarks to normalize the grid around the   
+  participant, or at minimum add calibration                                    
+       instructions and reject poor positioning.                                
+                                                                                
+    7. Clinical claims need stronger wording                                    
+       README and UI mention sarcopenia, Learned Non-Use, motor age, tremor,    
+  and Parkinson-like tremor ranges. Current                                     
+       formulas are heuristic, not validated clinical diagnostics.              
+       Solution: label outputs as “screening indicators” or “experimental       
+  estimates”, not diagnosis. Add a disclaimer.                                  
+                                                                                
+    Recommended Priority                                                        
+                                                                                
+    1. Fix file encoding and corrupted UI/docs text.                            
+    2. Make hand-comparison logic valid: no LNU unless both hands have enough   
+  samples.                                                                      
+    3. Improve test design for balanced left/right measurement.                 
+    4. Clarify frame color format and camera processing.                        
+    5. Add a small test suite for GameEngine, MotionAnalyzer, and grid-cell     
+  mapping.                                                                      
+
+● Let me read the key files to understand the current state before making fixes.
+
+  Read 5 files (ctrl+o to expand)
+
+● Let me also check the README and report generator.
+
+  Read 2 files (ctrl+o to expand)
+
+● Now I have a complete picture. Let me implement all the fixes systematically.
+
+● Update(src\game_engine.py)
+  ⎿  Added 1 line, removed 3 lines
+       93              if len(state.trajectory_buffer) > 100:
+       94                  state.trajectory_buffer = state.trajectory_buf
+           fer[-100:]
+       95  
+       96 -        # Check game over                                     
+       96 +        # Check game over — do NOT record the interrupted last
+          + target as a miss                                             
+       97          if elapsed >= state.duration_s:
+       98              state.phase = "done"
+       99 -            _record_event(state, success=False, hit_time=None,
+          - hand=active_hand,                                            
+      100 -                          frame_time=frame_time)              
+       99              result.event = "game_over"
+      100              result.hit_count = _count_hits(state.events)
+      101              return state, result
+
+● Now update motion_analyzer.py to guard LNU/dominance for single-hand mode and
+  fix motor age:
+
+● Update(src\motion_analyzer.py)
+  ⎿  Added 3 lines, removed 3 lines
+      50      composite_left: float = 0.0
+      51      dominant_hand: str = "unknown"
+      52  
+      53 -    # LNU                                                      
+      54 -    lnu_score: float = 0.0                                     
+      55 -    lnu_risk: str = "Low"                                      
+      53 +    # LNU — None when assessment doesn't have valid bilateral d
+         +ata                                                            
+      54 +    lnu_score: float | None = None                             
+      55 +    lnu_risk: str = "N/A"                                      
+      56  
+      57      # Motor Age
+      58      motor_age: float | None = None
+
+● Update(src\motion_analyzer.py)
+  ⎿  Added 4 lines, removed 3 lines
+      69  class MotionAnalyzer:
+      70      def analyze(self, state) -> AnalysisResult:
+      71          events = state.events if state else []
+      72 +        hand_side = state.hand_side if state else "both"       
+      73          r = AnalysisResult()
+      74  
+      75          right_events = [e for e in events if e["hand"] == "righ
+          t"]
+     ...
+      79          _compute_accuracy(r, right_events, left_events, events)
+      80          _compute_quality(r, right_events, left_events)
+      81          _compute_composite(r)
+      81 -        _compute_dominance(r)                                  
+      82 -        _compute_lnu(r, right_events, left_events)             
+      83 -        _compute_motor_age(r, state.participant_age if state el
+         -se None)                                                       
+      82 +        _compute_dominance(r, hand_side)                       
+      83 +        _compute_lnu(r, right_events, left_events, hand_side)  
+      84 +        _compute_motor_age(r, state.participant_age if state el
+         +se None, hand_side)                                            
+      85  
+      86          return r
+      87  
+
+● Update(src\motion_analyzer.py)
+  ⎿  Added 4 lines, removed 1 line
+      237          setattr(r, f"composite_{prefix}", _clamp(comp, 0, 100)
+           )
+      238  
+      239  
+      240 -def _compute_dominance(r: AnalysisResult):                    
+      240 +def _compute_dominance(r: AnalysisResult, hand_side: str):    
+      241 +    if hand_side != "both":                                   
+      242 +        r.dominant_hand = "N/A"                               
+      243 +        return                                                
+      244      if r.composite_right > r.composite_left + 2:
+      245          r.dominant_hand = "right"
+      246      elif r.composite_left > r.composite_right + 2:
+
+● Update(src\motion_analyzer.py)
+  ⎿  Added 12 lines, removed 5 lines
+      249          r.dominant_hand = "tie"
+      250  
+      251  
+      252 -def _compute_lnu(r: AnalysisResult, right_ev, left_ev):       
+      252 +_MIN_BILATERAL_HITS = 3                                       
+      253 +                                                              
+      254 +                                                              
+      255 +def _compute_lnu(r: AnalysisResult, right_ev, left_ev, hand_si
+          +de: str):                                                     
+      256 +    if hand_side != "both":                                   
+      257 +        r.lnu_score = None                                    
+      258 +        r.lnu_risk = "N/A"                                    
+      259 +        return                                                
+      260 +                                                              
+      261      n_r = sum(1 for e in right_ev if e["success"])
+      262      n_l = sum(1 for e in left_ev if e["success"])
+      255 -    total = n_r + n_l                                         
+      263  
+      257 -    if total == 0:                                            
+      258 -        r.lnu_score = 50.0                                    
+      259 -        r.lnu_risk = "Moderate"                               
+      264 +    if n_r < _MIN_BILATERAL_HITS or n_l < _MIN_BILATERAL_HITS:
+      265 +        r.lnu_score = None                                    
+      266 +        r.lnu_risk = "N/A"                                    
+      267          return
+      268  
+      269      max_n = max(n_r, n_l, 1)
+
+● Update(src\motion_analyzer.py)
+  ⎿  Added 10 lines, removed 3 lines
+      288          r.lnu_risk = "High"
+      289  
+      290  
+      291 -def _compute_motor_age(r: AnalysisResult, actual_age: int | No
+          -ne):                                                          
+      292 -    best_composite = max(r.composite_right, r.composite_left) 
+      293 -    best_tremor = min(r.tremor_power_right, r.tremor_power_lef
+          -t)                                                            
+      291 +def _compute_motor_age(r: AnalysisResult, actual_age: int | No
+          +ne, hand_side: str = "both"):                                 
+      292 +    if hand_side == "right":                                  
+      293 +        best_composite = r.composite_right                    
+      294 +        best_tremor = r.tremor_power_right                    
+      295 +    elif hand_side == "left":                                 
+      296 +        best_composite = r.composite_left                     
+      297 +        best_tremor = r.tremor_power_left                     
+      298 +    else:                                                     
+      299 +        best_composite = max(r.composite_right, r.composite_le
+          +ft)                                                           
+      300 +        best_tremor = min(r.tremor_power_right, r.tremor_power
+          +_left)                                                        
+      301      base_age = 20 + (100 - best_composite) / 100 * 65
+      302      tremor_adj = max(0.0, best_tremor - 10) / 5
+      303      r.motor_age = round(base_age + tremor_adj, 1)
+
+● Now update visualizer.py — handle None LNU, fix typos, add disclaimer, fix
+  dominance chart for N/A:
+
+● Update(src\visualizer.py)
+  ⎿  Added 10 lines, removed 2 lines
+      352      return fig
+      353  
+      354  
+      355 -def make_lnu_gauge(score: float, risk: str) -> go.Figure:     
+      355 +def make_lnu_gauge(score: float | None, risk: str) -> go.Figur
+          +e:                                                            
+      356 +    if score is None:                                         
+      357 +        fig = go.Figure()                                     
+      358 +        fig.update_layout(                                    
+      359 +            title="Learned Non-Use Risk: N/A<br><sup>Requires 
+          +Both Hands with ≥3 hits each</sup>",                          
+      360 +            height=300, template="plotly_white",              
+      361 +        )                                                     
+      362 +        return fig                                            
+      363 +                                                              
+      364      color = "#27ae60" if risk == "Low" else "#e67e22" if risk 
+           == "Moderate" else "#e74c3c"
+      365      fig = go.Figure(go.Indicator(
+      366          mode="gauge+number+delta",
+      367          value=score,
+      360 -        title={"text": f"Learn Non-Use Risk: <b>{risk}</b>", "
+          -font": {"size": 18}},                                         
+      368 +        title={"text": f"Learned Non-Use Risk (screening): <b>
+          +{risk}</b>", "font": {"size": 18}},                           
+      369          gauge={
+      370              "axis": {"range": [0, 100]},
+      371              "bar": {"color": color},
+
+● Update(src\visualizer.py)
+  ⎿  Added 9 lines, removed 1 line
+      322  
+      323  
+      324  def make_dominance_chart(analysis) -> go.Figure:
+      325 +    if analysis.dominant_hand == "N/A":                       
+      326 +        fig = go.Figure()                                     
+      327 +        fig.update_layout(                                    
+      328 +            title="Hand Dominance: N/A — requires Both Hands m
+          +ode",                                                         
+      329 +            height=420, template="plotly_white",              
+      330 +        )                                                     
+      331 +        return fig                                            
+      332 +                                                              
+      333      categories = ["Speed", "Accuracy", "Quality", "Composite"]
+      334  
+      335      r_vals = [
+     ...
+      353                                     opacity=0.7))
+      354      fig.update_layout(
+      355          polar=dict(radialaxis=dict(visible=True, range=[0, 100
+           ])),
+      348 -        title=f"Dominant Hand: {analysis.dominant_hand.upper()
+          -}",                                                           
+      356 +        title=f"Dominant Hand (screening): {analysis.dominant_
+          +hand.upper()}",                                               
+      357          template="plotly_white",
+      358          height=420,
+      359      )
+
+● Update(src\visualizer.py)
+  ⎿  Added 15 lines, removed 3 lines
+      467  
+      468      lnu_emoji = {"Low": "🟢", "Moderate": "🟡", "High": "🔴"}.
+           get(analysis.lnu_risk, "⚪")
+      469  
+      470 +    if analysis.lnu_score is None:                            
+      471 +        lnu_line = f"⚪ **{analysis.lnu_risk}** — requires Bot
+          +h Hands with ≥3 hits each"                                    
+      472 +    else:                                                     
+      473 +        lnu_line = f"{lnu_emoji} **{analysis.lnu_risk}** — Sco
+          +re: {analysis.lnu_score:.1f}/100"                             
+      474 +                                                              
+      475 +    if analysis.dominant_hand == "N/A":                       
+      476 +        dom_line = "**N/A** — requires Both Hands mode"       
+      477 +    else:                                                     
+      478 +        dom_line = f"**{analysis.dominant_hand.upper()}** (Rig
+          +ht: {analysis.composite_right:.0f} | Left: {analysis.composite
+          +_left:.0f})"                                                  
+      479 +                                                              
+      480      lines = [
+      481          f"## Assessment Report — {name}",
+      482          f"**Duration:** {duration}s | **Total Targets:** {tota
+           l_events} | **Hits:** {hits}",
+      483          "",
+      484 +        "> **Screening only:** These are experimental estimate
+          +s, not clinical diagnoses. Consult a healthcare professional f
+          +or medical evaluation.",                                      
+      485 +        "",                                                   
+      486          "### Speed",
+      487          f"- Right: {analysis.rt_mean_right:.0f}ms mean RT (sco
+           re: {analysis.speed_score_right:.0f}/100)" if analysis.rt_mean
+           _right > 0 else "- Right: no data",
+      488          f"- Left: {analysis.rt_mean_left:.0f}ms mean RT (score
+           : {analysis.speed_score_left:.0f}/100)" if analysis.rt_mean_le
+           ft > 0 else "- Left: no data",
+     ...
+      496          f"- Left: {analysis.quality_score_left:.0f}/100 (effic
+           iency {analysis.path_efficiency_left:.0f}%, tremor {analysis.t
+           remor_power_left:.0f})",
+      497          "",
+      498          "### Dominant Hand",
+      487 -        f"**{analysis.dominant_hand.upper()}** (Right: {analys
+          -is.composite_right:.0f} | Left: {analysis.composite_left:.0f})
+          -",                                                            
+      499 +        dom_line,                                             
+      500          "",
+      489 -        "### Learn Non-Use Risk",                             
+      490 -        f"{lnu_emoji} **{analysis.lnu_risk}** — Score: {analys
+          -is.lnu_score:.1f}/100",                                       
+      501 +        "### Learned Non-Use Risk",                           
+      502 +        lnu_line,                                             
+      503          "",
+      504          "### Motor Age Estimate",
+      505          f"**{analysis.motor_age} years**" + (f" (Chronological
+           : {state.participant_age})" if state and state.participant_age
+            else ""),
+
+● Now fix the typo in report_generator.py and handle None LNU:
+
+● Update(src\report_generator.py)
+  ⎿  Added 9 lines, removed 1 line
+      82      pdf.ln(8)
+      83      pdf.set_font("Helvetica", "B", 13)
+      84      pdf.cell(0, 10, f"Dominant Hand: {analysis.dominant_hand.up
+          per()}", ln=True)
+      85 -    pdf.cell(0, 10, f"Learn Non-Use Risk: {analysis.lnu_risk} (
+         -Score: {analysis.lnu_score:.1f}/100)", ln=True)                
+      85 +    lnu_text = (                                               
+      86 +        f"Learned Non-Use Risk: {analysis.lnu_risk} (Score: {an
+         +alysis.lnu_score:.1f}/100)"                                    
+      87 +        if analysis.lnu_score is not None                      
+      88 +        else "Learned Non-Use Risk: N/A (requires Both Hands wi
+         +th >=3 hits each)"                                             
+      89 +    )                                                          
+      90 +    pdf.cell(0, 10, lnu_text, ln=True)                         
+      91      pdf.cell(0, 10, f"Estimated Motor Age: {analysis.motor_age}
+           years", ln=True)
+      92 +    pdf.ln(4)                                                  
+      93 +    pdf.set_font("Helvetica", "I", 9)                          
+      94 +    pdf.multi_cell(0, 5, "DISCLAIMER: All scores are experiment
+         +al screening indicators, not clinical diagnoses. Consult a heal
+         +thcare professional for medical evaluation.")                  
+      95  
+      96      # Page 2: Charts (embedded as PNG if kaleido is available)
+      97      try:
+
+● Also fix the methodology page typo:
+
+● Update(src\report_generator.py)
+  ⎿  Added 1 line, removed 1 line
+      126          "Path Efficiency = direct distance / actual path lengt
+           h. "
+      127          "Smoothness is computed via Normalized Jerk Score (NJS
+           ). "
+      128          "Tremor Power uses FFT to measure oscillation in the 3
+           -7 Hz band. "
+      129 -        "Learn Non-Use (LNU) Risk combines use asymmetry, reac
+          -tion time asymmetry, "                                        
+      129 +        "Learned Non-Use (LNU) Risk combines use asymmetry, re
+          +action time asymmetry, "                                      
+      130          "and quality asymmetry between limbs. "
+      131          "Motor Age is estimated from composite performance rel
+           ative to age-normative data."
+      132      )
+
+● Now fix app.py — add BGR/RGB conversion for correct colors, document the frame
+  format, and add a "Both Hands" note:
+
+● Update(app.py)
+  ⎿  Added 4 lines, removed 4 lines
+      42  _COUNTDOWN_S = 3  # seconds of "3-2-1" before test starts
+      43  
+      44  
+      45 -def _make_done(state, frame, grid_bounds, pose_ok, pose_landmar
+         -ks):                                                           
+      46 -    """Transition state to done and return preview frame."""   
+      45 +def _make_done(state, frame_bgr, grid_bounds, pose_ok, pose_lan
+         +dmarks):                                                       
+      46 +    """Transition state to done and return preview frame (BGR i
+         +n, RGB out for Gradio)."""                                     
+      47      _stop_event.clear()
+      48      s = copy.copy(state) if state is not None else state
+      49      if s is not None:
+      50          s.events = list(s.events)
+      51          s.phase = "done"
+      52 -    out = draw_preview_overlay(frame, grid_bounds, pose_ok, pos
+         -e_landmarks)                                                   
+      53 -    return out, s, gr.update(), gr.update(), gr.update()       
+      52 +    out = draw_preview_overlay(frame_bgr, grid_bounds, pose_ok,
+         + pose_landmarks)                                               
+      53 +    return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), s, gr.update()
+         +, gr.update(), gr.update()                                     
+      54  
+      55  
+      56  def unified_stream(frame: np.ndarray, state: GameState):
+● Update(app.py)
+  ⎿  Added 13 lines, removed 10 lines
+      61              return _no_update
+      62  
+      63          frame = cv2.flip(frame, 1)  # mirror → selfie view
+      64 -        tracking = _tracker.process(frame)                     
+      64 +        # Gradio delivers RGB frames; MediaPipe expects RGB so 
+         +pass frame as-is to tracker.                                   
+      65 +        # Convert to BGR for OpenCV drawing functions, then bac
+         +k to RGB for Gradio output.                                    
+      66 +        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)     
+      67 +        tracking = _tracker.process(frame)  # RGB → MediaPipe  
+      68          grid_bounds = compute_grid_bounds_with_shape(tracking.s
+          houlders, frame.shape)
+      69          pose_ok = tracking.shoulders is not None
+      70          now = time.perf_counter()
+      71  
+      72          # Stop button was pressed — end immediately from any ac
+          tive phase
+      73          if _stop_event.is_set() and state is not None and state
+          .phase in ("countdown", "running"):
+      71 -            return _make_done(state, frame, grid_bounds, pose_o
+         -k, tracking.pose_landmarks)                                    
+      74 +            return _make_done(state, frame_bgr, grid_bounds, po
+         +se_ok, tracking.pose_landmarks)                                
+      75  
+      76          # ── Countdown phase ──────────────────────────────────
+          ────────────────
+      77          if state is not None and state.phase == "countdown":
+     ...
+      82                  state.phase = "running"
+      83                  state.start_time = now
+      84                  state.target_start_time = now
+      82 -            out = draw_countdown_overlay(frame, tracking.pose_l
+         -andmarks,                                                      
+      85 +            out = draw_countdown_overlay(frame_bgr, tracking.po
+         +se_landmarks,                                                  
+      86                                           int(remaining) + 1 if 
+          remaining > 0 else 0)
+      84 -            return out, state, gr.update(), gr.update(), gr.upd
+         -ate()                                                          
+      87 +            return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), state,
+         + gr.update(), gr.update(), gr.update()                         
+      88  
+      89          # ── Preview (idle / analyzed) ────────────────────────
+          ────────────────
+      90          if state is None or state.phase not in ("running", "don
+          e"):
+      88 -            out = draw_preview_overlay(frame, grid_bounds, pose
+         -_ok, tracking.pose_landmarks)                                  
+      89 -            return out, state, gr.update(), gr.update(), gr.upd
+         -ate()                                                          
+      91 +            out = draw_preview_overlay(frame_bgr, grid_bounds, 
+         +pose_ok, tracking.pose_landmarks)                              
+      92 +            return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), state,
+         + gr.update(), gr.update(), gr.update()                         
+      93  
+      94          # ── Running ──────────────────────────────────────────
+          ────────────────
+      95          if state.phase == "running":
+     ...
+      101                  now,
+      102              )
+      103              out = draw_overlay(
+      101 -                frame, state, result, grid_bounds,            
+      104 +                frame_bgr, state, result, grid_bounds,        
+      105                  tracking.right_hand_pos, tracking.left_hand_po
+           s,
+      106                  tracking.pose_landmarks,
+      107              )
+      108              target_name = CELL_NAMES.get(state.current_target,
+            "—")
+      106 -            return out, state, float(result.remaining_s), int(
+          -result.hit_count), target_name                                
+      109 +            return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), state
+          +, float(result.remaining_s), int(result.hit_count), target_nam
+          +e                                                             
+      110  
+      111          # ── Done (waiting for poll_timer) ───────────────────
+           ─────────────────
+      109 -        out = draw_preview_overlay(frame, grid_bounds, pose_ok
+          -, tracking.pose_landmarks)                                    
+      110 -        return out, state, gr.update(), gr.update(), gr.update
+          -()                                                            
+      112 +        out = draw_preview_overlay(frame_bgr, grid_bounds, pos
+          +e_ok, tracking.pose_landmarks)                                
+      113 +        return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), state, gr
+          +.update(), gr.update(), gr.update()                           
+      114  
+      115      except Exception:
+      116          import traceback
+
+● Now add the disclaimer and Both Hands note to the Gradio UI:
+
+● Update(app.py)
+  ⎿  Added 4 lines, removed 2 lines
+      237  
+      238      gr.Markdown(
+      239          "# Upper Limb Dexterity Assessment\n"
+      240 -        "*AI-Powered Reaching Task — Sarcopenia & Learned Non-
+          -Use Detection*"                                               
+      240 +        "*AI-Powered Reaching Task — Sarcopenia & Learned Non-
+          +Use Screening*"                                               
+      241      )
+      242      gr.Markdown(
+      243          "**How to use:** Click the **⏺ Record** button on the 
+           camera below to start the webcam, "
+      244 -        "then click **Start Assessment**."                    
+      244 +        "then click **Start Assessment**.\n\n"                
+      245 +        "> **Screening tool only.** Results are experimental i
+          +ndicators, not clinical diagnoses. "                          
+      246 +        "Consult a healthcare professional for medical evaluat
+          +ion."                                                         
+      247      )
+      248  
+      249      # Single component: webcam feed in, processed frame out (o
+           verlay drawn server-side)
+
+● Update(app.py)
+  ⎿  Added 1 line
+      270                      choices=[("Right Hand", "right"), ("Left H
+           and", "left"), ("Both Hands", "both")],
+      271                      value="right",
+      272                      label="Hands to Assess",
+      273 +                    info="Both Hands measures free-choice reac
+          +hing. LNU risk requires Both Hands with ≥3 hits per hand.",   
+      274                  )
+      275              with gr.Column(scale=1):
+      276                  participant_name = gr.Textbox(label="Name (opt
+           ional)", placeholder="e.g. John Doe")
+
+● Now add the RGB frame format note to tracker.py:
+
+● Update(src\tracker.py)
+  ⎿  Added 1 line
+      32          )
+      33  
+      34      def process(self, frame_rgb: np.ndarray) -> TrackingResult:
+      35 +        """Process one frame. frame_rgb must be an RGB uint8 ar
+         +ray (Gradio webcam convention)."""                             
+      36          t = time.perf_counter()
+      37          with self._lock:
+      38              results = self._holistic.process(frame_rgb)
+
+● Now let's verify all the changes look correct by doing a quick review of key
+  edited sections:
+
+  Read 1 file (ctrl+o to expand)
+
+● All changes look correct. Let me do a quick sanity check on the game_engine.py
+  fix and app.py color conversion:
+
+  Read 2 files (ctrl+o to expand)
+
+● Everything looks correct. Here's a summary of all the changes made:
+
+  ---
+  Issue #1 — Encoding: The Python source files were already clean ASCII/UTF-8
+  and the README contained valid Thai. No corrupted text was found in the
+  current state. Added no-op for this; the files read cleanly.
+
+  Issue #2 — Frame color format (fixed): app.py now converts the Gradio RGB
+  frame to BGR before passing to OpenCV drawing functions, then converts back to
+  RGB before returning to Gradio. MediaPipe still receives the original RGB
+  frame. This fixes colors like the red flash (was appearing blue) and skeleton
+  overlay colors.
+
+  Issue #3 — Single-hand LNU misleading results (fixed): _compute_lnu now
+  returns lnu_score=None, lnu_risk="N/A" if hand_side != "both" or if either
+  hand has fewer than 3 successful hits. _compute_dominance similarly returns
+  "N/A" for single-hand mode. All downstream UI (make_lnu_gauge,
+  make_dominance_chart, make_summary_markdown, PDF report) handles None/"N/A"
+  gracefully with an explanatory message.
+
+  Issue #4 — Both Hands mode note: Added info= text on the hand radio in the UI
+  explaining that Both Hands measures free-choice behavior and LNU requires ≥3
+  hits per hand.
+
+  Issue #5 — Final timeout extra failed event (fixed): Removed the
+  _record_event(success=False) call from the game-over block in game_engine.py.
+  An incomplete last target at time-up is no longer recorded as a miss.
+
+  Issue #6 — Grid body position: Noted as a design trade-off; no change (would
+  require calibration flow, out of scope).
+
+  Issue #7 — Clinical disclaimers (fixed): Added a "Screening only" blockquote
+  in the UI header, an info note on the hand selector, "(screening)" label in
+  gauge/radar chart titles, a disclaimer callout in the summary markdown, and a
+  DISCLAIMER footer in the PDF report. "Learn Non-Use" typo corrected to
+  "Learned Non-Use" throughout.
+
+✻ Sautéed for 6m 15s
+
+※ recap: Fixed 5 issues from the code review: corrected BGR/RGB color conversion, guarded LNU and dominance metrics for single-hand mode, removed the spurious game-over miss event, and added clinical screening disclaimers throughout. Next step is to run the app and verify the changes work. (disable recaps in /config)

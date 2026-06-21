@@ -82,8 +82,16 @@ def export_pdf(analysis, charts: dict, state, filepath: str | None = None) -> st
     pdf.ln(8)
     pdf.set_font("Helvetica", "B", 13)
     pdf.cell(0, 10, f"Dominant Hand: {analysis.dominant_hand.upper()}", ln=True)
-    pdf.cell(0, 10, f"Learn Non-Use Risk: {analysis.lnu_risk} (Score: {analysis.lnu_score:.1f}/100)", ln=True)
+    lnu_text = (
+        f"Learned Non-Use Risk: {analysis.lnu_risk} (Score: {analysis.lnu_score:.1f}/100)"
+        if analysis.lnu_score is not None
+        else "Learned Non-Use Risk: N/A (requires Both Hands with >=3 hits each)"
+    )
+    pdf.cell(0, 10, lnu_text, ln=True)
     pdf.cell(0, 10, f"Estimated Motor Age: {analysis.motor_age} years", ln=True)
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "I", 9)
+    pdf.multi_cell(0, 5, "DISCLAIMER: All scores are experimental screening indicators, not clinical diagnoses. Consult a healthcare professional for medical evaluation.")
 
     # Page 2: Charts (embedded as PNG if kaleido is available)
     try:
@@ -118,7 +126,7 @@ def export_pdf(analysis, charts: dict, state, filepath: str | None = None) -> st
         "Path Efficiency = direct distance / actual path length. "
         "Smoothness is computed via Normalized Jerk Score (NJS). "
         "Tremor Power uses FFT to measure oscillation in the 3-7 Hz band. "
-        "Learn Non-Use (LNU) Risk combines use asymmetry, reaction time asymmetry, "
+        "Learned Non-Use (LNU) Risk combines use asymmetry, reaction time asymmetry, "
         "and quality asymmetry between limbs. "
         "Motor Age is estimated from composite performance relative to age-normative data."
     )

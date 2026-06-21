@@ -42,15 +42,15 @@ _engine = GameEngine()
 _COUNTDOWN_S = 3  # seconds of "3-2-1" before test starts
 
 
-def _make_done(state, frame, grid_bounds, pose_ok, pose_landmarks):
-    """Transition state to done and return preview frame."""
+def _make_done(state, frame_bgr, grid_bounds, pose_ok, pose_landmarks):
+    """Transition state to done and return preview frame (BGR in, RGB out for Gradio)."""
     _stop_event.clear()
     s = copy.copy(state) if state is not None else state
     if s is not None:
         s.events = list(s.events)
         s.phase = "done"
-    out = draw_preview_overlay(frame, grid_bounds, pose_ok, pose_landmarks)
-    return out, s, gr.update(), gr.update(), gr.update()
+    out = draw_preview_overlay(frame_bgr, grid_bounds, pose_ok, pose_landmarks)
+    return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), s, gr.update(), gr.update(), gr.update()
 
 
 def unified_stream(frame: np.ndarray, state: GameState):
@@ -61,14 +61,17 @@ def unified_stream(frame: np.ndarray, state: GameState):
             return _no_update
 
         frame = cv2.flip(frame, 1)  # mirror → selfie view
-        tracking = _tracker.process(frame)
+        # Gradio delivers RGB frames; MediaPipe expects RGB so pass frame as-is to tracker.
+        # Convert to BGR for OpenCV drawing functions, then back to RGB for Gradio output.
+        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        tracking = _tracker.process(frame)  # RGB → MediaPipe
         grid_bounds = compute_grid_bounds_with_shape(tracking.shoulders, frame.shape)
         pose_ok = tracking.shoulders is not None
         now = time.perf_counter()
 
         # Stop button was pressed — end immediately from any active phase
         if _stop_event.is_set() and state is not None and state.phase in ("countdown", "running"):
-            return _make_done(state, frame, grid_bounds, pose_ok, tracking.pose_landmarks)
+            return _make_done(state, frame_bgr, grid_bounds, pose_ok, tracking.pose_landmarks)
 
         # ── Countdown phase ──────────────────────────────────────────────────
         if state is not None and state.phase == "countdown":
@@ -79,14 +82,14 @@ def unified_stream(frame: np.ndarray, state: GameState):
                 state.phase = "running"
                 state.start_time = now
                 state.target_start_time = now
-            out = draw_countdown_overlay(frame, tracking.pose_landmarks,
+            out = draw_countdown_overlay(frame_bgr, tracking.pose_landmarks,
                                          int(remaining) + 1 if remaining > 0 else 0)
-            return out, state, gr.update(), gr.update(), gr.update()
+            return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), state, gr.update(), gr.update(), gr.update()
 
         # ── Preview (idle / analyzed) ────────────────────────────────────────
         if state is None or state.phase not in ("running", "done"):
-            out = draw_preview_overlay(frame, grid_bounds, pose_ok, tracking.pose_landmarks)
-            return out, state, gr.update(), gr.update(), gr.update()
+            out = draw_preview_overlay(frame_bgr, grid_bounds, pose_ok, tracking.pose_landmarks)
+            return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), state, gr.update(), gr.update(), gr.update()
 
         # ── Running ──────────────────────────────────────────────────────────
         if state.phase == "running":
@@ -98,16 +101,16 @@ def unified_stream(frame: np.ndarray, state: GameState):
                 now,
             )
             out = draw_overlay(
-                frame, state, result, grid_bounds,
+                frame_bgr, state, result, grid_bounds,
                 tracking.right_hand_pos, tracking.left_hand_pos,
                 tracking.pose_landmarks,
             )
             target_name = CELL_NAMES.get(state.current_target, "—")
-            return out, state, float(result.remaining_s), int(result.hit_count), target_name
+            return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), state, float(result.remaining_s), int(result.hit_count), target_name
 
         # ── Done (waiting for poll_timer) ────────────────────────────────────
-        out = draw_preview_overlay(frame, grid_bounds, pose_ok, tracking.pose_landmarks)
-        return out, state, gr.update(), gr.update(), gr.update()
+        out = draw_preview_overlay(frame_bgr, grid_bounds, pose_ok, tracking.pose_landmarks)
+        return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), state, gr.update(), gr.update(), gr.update()
 
     except Exception:
         import traceback
@@ -234,11 +237,13 @@ with gr.Blocks(title="Upper Limb Dexterity Assessment") as demo:
 
     gr.Markdown(
         "# Upper Limb Dexterity Assessment\n"
-        "*AI-Powered Reaching Task — Sarcopenia & Learned Non-Use Detection*"
+        "*AI-Powered Reaching Task — Sarcopenia & Learned Non-Use Screening*"
     )
     gr.Markdown(
         "**How to use:** Click the **⏺ Record** button on the camera below to start the webcam, "
-        "then click **Start Assessment**."
+        "then click **Start Assessment**.\n\n"
+        "> **Screening tool only.** Results are experimental indicators, not clinical diagnoses. "
+        "Consult a healthcare professional for medical evaluation."
     )
 
     # Single component: webcam feed in, processed frame out (overlay drawn server-side)
@@ -265,6 +270,7 @@ with gr.Blocks(title="Upper Limb Dexterity Assessment") as demo:
                     choices=[("Right Hand", "right"), ("Left Hand", "left"), ("Both Hands", "both")],
                     value="right",
                     label="Hands to Assess",
+                    info="Both Hands measures free-choice reaching. LNU risk requires Both Hands with ≥3 hits per hand.",
                 )
             with gr.Column(scale=1):
                 participant_name = gr.Textbox(label="Name (optional)", placeholder="e.g. John Doe")

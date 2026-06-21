@@ -322,6 +322,14 @@ def make_quality_chart(events: list, analysis=None) -> go.Figure:
 
 
 def make_dominance_chart(analysis) -> go.Figure:
+    if analysis.dominant_hand == "N/A":
+        fig = go.Figure()
+        fig.update_layout(
+            title="Hand Dominance: N/A — requires Both Hands mode",
+            height=420, template="plotly_white",
+        )
+        return fig
+
     categories = ["Speed", "Accuracy", "Quality", "Composite"]
 
     r_vals = [
@@ -345,19 +353,27 @@ def make_dominance_chart(analysis) -> go.Figure:
                                    opacity=0.7))
     fig.update_layout(
         polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
-        title=f"Dominant Hand: {analysis.dominant_hand.upper()}",
+        title=f"Dominant Hand (screening): {analysis.dominant_hand.upper()}",
         template="plotly_white",
         height=420,
     )
     return fig
 
 
-def make_lnu_gauge(score: float, risk: str) -> go.Figure:
+def make_lnu_gauge(score: float | None, risk: str) -> go.Figure:
+    if score is None:
+        fig = go.Figure()
+        fig.update_layout(
+            title="Learned Non-Use Risk: N/A<br><sup>Requires Both Hands with ≥3 hits each</sup>",
+            height=300, template="plotly_white",
+        )
+        return fig
+
     color = "#27ae60" if risk == "Low" else "#e67e22" if risk == "Moderate" else "#e74c3c"
     fig = go.Figure(go.Indicator(
         mode="gauge+number+delta",
         value=score,
-        title={"text": f"Learn Non-Use Risk: <b>{risk}</b>", "font": {"size": 18}},
+        title={"text": f"Learned Non-Use Risk (screening): <b>{risk}</b>", "font": {"size": 18}},
         gauge={
             "axis": {"range": [0, 100]},
             "bar": {"color": color},
@@ -451,9 +467,21 @@ def make_summary_markdown(analysis, state) -> str:
 
     lnu_emoji = {"Low": "🟢", "Moderate": "🟡", "High": "🔴"}.get(analysis.lnu_risk, "⚪")
 
+    if analysis.lnu_score is None:
+        lnu_line = f"⚪ **{analysis.lnu_risk}** — requires Both Hands with ≥3 hits each"
+    else:
+        lnu_line = f"{lnu_emoji} **{analysis.lnu_risk}** — Score: {analysis.lnu_score:.1f}/100"
+
+    if analysis.dominant_hand == "N/A":
+        dom_line = "**N/A** — requires Both Hands mode"
+    else:
+        dom_line = f"**{analysis.dominant_hand.upper()}** (Right: {analysis.composite_right:.0f} | Left: {analysis.composite_left:.0f})"
+
     lines = [
         f"## Assessment Report — {name}",
         f"**Duration:** {duration}s | **Total Targets:** {total_events} | **Hits:** {hits}",
+        "",
+        "> **Screening only:** These are experimental estimates, not clinical diagnoses. Consult a healthcare professional for medical evaluation.",
         "",
         "### Speed",
         f"- Right: {analysis.rt_mean_right:.0f}ms mean RT (score: {analysis.speed_score_right:.0f}/100)" if analysis.rt_mean_right > 0 else "- Right: no data",
@@ -468,10 +496,10 @@ def make_summary_markdown(analysis, state) -> str:
         f"- Left: {analysis.quality_score_left:.0f}/100 (efficiency {analysis.path_efficiency_left:.0f}%, tremor {analysis.tremor_power_left:.0f})",
         "",
         "### Dominant Hand",
-        f"**{analysis.dominant_hand.upper()}** (Right: {analysis.composite_right:.0f} | Left: {analysis.composite_left:.0f})",
+        dom_line,
         "",
-        "### Learn Non-Use Risk",
-        f"{lnu_emoji} **{analysis.lnu_risk}** — Score: {analysis.lnu_score:.1f}/100",
+        "### Learned Non-Use Risk",
+        lnu_line,
         "",
         "### Motor Age Estimate",
         f"**{analysis.motor_age} years**" + (f" (Chronological: {state.participant_age})" if state and state.participant_age else ""),

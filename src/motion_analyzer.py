@@ -50,9 +50,9 @@ class AnalysisResult:
     composite_left: float = 0.0
     dominant_hand: str = "unknown"
 
-    # LNU
-    lnu_score: float = 0.0
-    lnu_risk: str = "Low"
+    # LNU — None when assessment doesn't have valid bilateral data
+    lnu_score: float | None = None
+    lnu_risk: str = "N/A"
 
     # Motor Age
     motor_age: float | None = None
@@ -69,6 +69,7 @@ class AnalysisResult:
 class MotionAnalyzer:
     def analyze(self, state) -> AnalysisResult:
         events = state.events if state else []
+        hand_side = state.hand_side if state else "both"
         r = AnalysisResult()
 
         right_events = [e for e in events if e["hand"] == "right"]
@@ -78,9 +79,9 @@ class MotionAnalyzer:
         _compute_accuracy(r, right_events, left_events, events)
         _compute_quality(r, right_events, left_events)
         _compute_composite(r)
-        _compute_dominance(r)
-        _compute_lnu(r, right_events, left_events)
-        _compute_motor_age(r, state.participant_age if state else None)
+        _compute_dominance(r, hand_side)
+        _compute_lnu(r, right_events, left_events, hand_side)
+        _compute_motor_age(r, state.participant_age if state else None, hand_side)
 
         return r
 
@@ -236,7 +237,10 @@ def _compute_composite(r: AnalysisResult):
         setattr(r, f"composite_{prefix}", _clamp(comp, 0, 100))
 
 
-def _compute_dominance(r: AnalysisResult):
+def _compute_dominance(r: AnalysisResult, hand_side: str):
+    if hand_side != "both":
+        r.dominant_hand = "N/A"
+        return
     if r.composite_right > r.composite_left + 2:
         r.dominant_hand = "right"
     elif r.composite_left > r.composite_right + 2:
@@ -245,14 +249,21 @@ def _compute_dominance(r: AnalysisResult):
         r.dominant_hand = "tie"
 
 
-def _compute_lnu(r: AnalysisResult, right_ev, left_ev):
+_MIN_BILATERAL_HITS = 3
+
+
+def _compute_lnu(r: AnalysisResult, right_ev, left_ev, hand_side: str):
+    if hand_side != "both":
+        r.lnu_score = None
+        r.lnu_risk = "N/A"
+        return
+
     n_r = sum(1 for e in right_ev if e["success"])
     n_l = sum(1 for e in left_ev if e["success"])
-    total = n_r + n_l
 
-    if total == 0:
-        r.lnu_score = 50.0
-        r.lnu_risk = "Moderate"
+    if n_r < _MIN_BILATERAL_HITS or n_l < _MIN_BILATERAL_HITS:
+        r.lnu_score = None
+        r.lnu_risk = "N/A"
         return
 
     max_n = max(n_r, n_l, 1)
@@ -277,9 +288,16 @@ def _compute_lnu(r: AnalysisResult, right_ev, left_ev):
         r.lnu_risk = "High"
 
 
-def _compute_motor_age(r: AnalysisResult, actual_age: int | None):
-    best_composite = max(r.composite_right, r.composite_left)
-    best_tremor = min(r.tremor_power_right, r.tremor_power_left)
+def _compute_motor_age(r: AnalysisResult, actual_age: int | None, hand_side: str = "both"):
+    if hand_side == "right":
+        best_composite = r.composite_right
+        best_tremor = r.tremor_power_right
+    elif hand_side == "left":
+        best_composite = r.composite_left
+        best_tremor = r.tremor_power_left
+    else:
+        best_composite = max(r.composite_right, r.composite_left)
+        best_tremor = min(r.tremor_power_right, r.tremor_power_left)
     base_age = 20 + (100 - best_composite) / 100 * 65
     tremor_adj = max(0.0, best_tremor - 10) / 5
     r.motor_age = round(base_age + tremor_adj, 1)

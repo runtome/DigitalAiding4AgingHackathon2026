@@ -32,6 +32,7 @@ class HandTracker:
         )
 
     def process(self, frame_rgb: np.ndarray) -> TrackingResult:
+        """Process one frame. frame_rgb must be an RGB uint8 array (Gradio webcam convention)."""
         t = time.perf_counter()
         with self._lock:
             results = self._holistic.process(frame_rgb)
