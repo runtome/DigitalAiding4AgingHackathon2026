@@ -42,14 +42,18 @@ _engine = GameEngine()
 _COUNTDOWN_S = 3  # seconds of "3-2-1" before test starts
 
 
-def _make_done(state, frame_bgr, grid_bounds, pose_ok, pose_landmarks):
+def _make_done(state, frame_bgr, grid_bounds, pose_ok, tracking):
     """Transition state to done and return preview frame (BGR in, RGB out for Gradio)."""
     _stop_event.clear()
     s = copy.copy(state) if state is not None else state
     if s is not None:
         s.events = list(s.events)
         s.phase = "done"
-    out = draw_preview_overlay(frame_bgr, grid_bounds, pose_ok, pose_landmarks)
+    out = draw_preview_overlay(
+        frame_bgr, grid_bounds, pose_ok,
+        tracking.pose_landmarks, tracking.right_hand_landmarks,
+        tracking.left_hand_landmarks, tracking.face_landmarks,
+    )
     return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), s, gr.update(), gr.update(), gr.update()
 
 
@@ -71,7 +75,7 @@ def unified_stream(frame: np.ndarray, state: GameState):
 
         # Stop button was pressed — end immediately from any active phase
         if _stop_event.is_set() and state is not None and state.phase in ("countdown", "running"):
-            return _make_done(state, frame_bgr, grid_bounds, pose_ok, tracking.pose_landmarks)
+            return _make_done(state, frame_bgr, grid_bounds, pose_ok, tracking)
 
         # ── Countdown phase ──────────────────────────────────────────────────
         if state is not None and state.phase == "countdown":
@@ -82,13 +86,20 @@ def unified_stream(frame: np.ndarray, state: GameState):
                 state.phase = "running"
                 state.start_time = now
                 state.target_start_time = now
-            out = draw_countdown_overlay(frame_bgr, tracking.pose_landmarks,
-                                         int(remaining) + 1 if remaining > 0 else 0)
+            out = draw_countdown_overlay(
+                frame_bgr, tracking.pose_landmarks,
+                int(remaining) + 1 if remaining > 0 else 0,
+                tracking.right_hand_landmarks, tracking.left_hand_landmarks, tracking.face_landmarks,
+            )
             return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), state, gr.update(), gr.update(), gr.update()
 
         # ── Preview (idle / analyzed) ────────────────────────────────────────
         if state is None or state.phase not in ("running", "done"):
-            out = draw_preview_overlay(frame_bgr, grid_bounds, pose_ok, tracking.pose_landmarks)
+            out = draw_preview_overlay(
+                frame_bgr, grid_bounds, pose_ok,
+                tracking.pose_landmarks, tracking.right_hand_landmarks,
+                tracking.left_hand_landmarks, tracking.face_landmarks,
+            )
             return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), state, gr.update(), gr.update(), gr.update()
 
         # ── Running ──────────────────────────────────────────────────────────
@@ -103,13 +114,18 @@ def unified_stream(frame: np.ndarray, state: GameState):
             out = draw_overlay(
                 frame_bgr, state, result, grid_bounds,
                 tracking.right_hand_pos, tracking.left_hand_pos,
-                tracking.pose_landmarks,
+                tracking.pose_landmarks, tracking.right_hand_landmarks,
+                tracking.left_hand_landmarks, tracking.face_landmarks,
             )
             target_name = CELL_NAMES.get(state.current_target, "—")
             return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), state, float(result.remaining_s), int(result.hit_count), target_name
 
         # ── Done (waiting for poll_timer) ────────────────────────────────────
-        out = draw_preview_overlay(frame_bgr, grid_bounds, pose_ok, tracking.pose_landmarks)
+        out = draw_preview_overlay(
+            frame_bgr, grid_bounds, pose_ok,
+            tracking.pose_landmarks, tracking.right_hand_landmarks,
+            tracking.left_hand_landmarks, tracking.face_landmarks,
+        )
         return cv2.cvtColor(out, cv2.COLOR_BGR2RGB), state, gr.update(), gr.update(), gr.update()
 
     except Exception:

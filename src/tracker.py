@@ -1,11 +1,47 @@
+import os
 import threading
 import time
+import urllib.request
 from dataclasses import dataclass
 
 import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 import numpy as np
 
-_mp_holistic = mp.solutions.holistic
+# Optional GPU support via torch (falls back to CPU gracefully)
+try:
+    import torch
+    _USE_GPU = torch.cuda.is_available()
+except ImportError:
+    _USE_GPU = False
+
+print(f"HandTracker: {'GPU (CUDA)' if _USE_GPU else 'CPU'} delegate")
+
+# Model .task files download alongside this module on first run
+_DIR = os.path.dirname(os.path.abspath(__file__))
+_MODELS = {
+    "hand": (
+        os.path.join(_DIR, "hand_landmarker.task"),
+        "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+    ),
+    "pose": (
+        os.path.join(_DIR, "pose_landmarker_full.task"),
+        "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
+    ),
+    "face": (
+        os.path.join(_DIR, "face_landmarker.task"),
+        "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+    ),
+}
+
+
+def _ensure_models():
+    for name, (path, url) in _MODELS.items():
+        if not os.path.exists(path):
+            print(f"  Downloading {name} model → {path}")
+            urllib.request.urlretrieve(url, path)
+
 
 PALM_LANDMARKS = [0, 5, 9, 13, 17]
 
@@ -14,64 +50,125 @@ PALM_LANDMARKS = [0, 5, 9, 13, 17]
 class TrackingResult:
     right_hand_pos: tuple | None
     left_hand_pos: tuple | None
-    right_hand_landmarks: list | None
+    right_hand_landmarks: list | None   # 21 NormalizedLandmark (Tasks API)
     left_hand_landmarks: list | None
+    face_landmarks: list | None         # 478 NormalizedLandmark, first detected face
     shoulders: tuple | None
-    pose_landmarks: object | None   # raw MediaPipe NormalizedLandmarkList
+    pose_landmarks: list | None         # 33 NormalizedLandmark, first detected pose
     frame_time: float
 
 
+def _make_base(model_path: str, gpu: bool) -> python.BaseOptions:
+    delegate = python.BaseOptions.Delegate.GPU if gpu else python.BaseOptions.Delegate.CPU
+    return python.BaseOptions(model_asset_path=model_path, delegate=delegate)
+
+
+def _try_create(create_fn, make_opts_fn, name: str):
+    """Try GPU delegate first, silently fall back to CPU."""
+    if _USE_GPU:
+        try:
+            task = create_fn(make_opts_fn(gpu=True))
+            print(f"  {name}: GPU")
+            return task
+        except Exception:
+            print(f"  {name}: GPU failed → CPU")
+    task = create_fn(make_opts_fn(gpu=False))
+    if not _USE_GPU:
+        print(f"  {name}: CPU")
+    return task
+
+
 class HandTracker:
-    def __init__(self, min_detection_confidence: float = 0.6, min_tracking_confidence: float = 0.5):
+    def __init__(self, min_detection_confidence: float = 0.5, min_tracking_confidence: float = 0.5):
+        _ensure_models()
         self._lock = threading.Lock()
-        self._holistic = _mp_holistic.Holistic(
-            static_image_mode=False,
-            model_complexity=1,
-            min_detection_confidence=min_detection_confidence,
-            min_tracking_confidence=min_tracking_confidence,
-        )
+        conf_d, conf_t = min_detection_confidence, min_tracking_confidence
+
+        def hand_opts(gpu):
+            return vision.HandLandmarkerOptions(
+                base_options=_make_base(_MODELS["hand"][0], gpu),
+                running_mode=vision.RunningMode.IMAGE,
+                num_hands=2,
+                min_hand_detection_confidence=conf_d,
+                min_tracking_confidence=conf_t,
+            )
+
+        def pose_opts(gpu):
+            return vision.PoseLandmarkerOptions(
+                base_options=_make_base(_MODELS["pose"][0], gpu),
+                running_mode=vision.RunningMode.IMAGE,
+                num_poses=1,
+                min_pose_detection_confidence=conf_d,
+                min_tracking_confidence=conf_t,
+            )
+
+        def face_opts(gpu):
+            return vision.FaceLandmarkerOptions(
+                base_options=_make_base(_MODELS["face"][0], gpu),
+                running_mode=vision.RunningMode.IMAGE,
+                num_faces=1,
+                min_face_detection_confidence=conf_d,
+                min_tracking_confidence=conf_t,
+            )
+
+        print("Initializing MediaPipe Tasks landmarkers:")
+        self._hand_lm = _try_create(vision.HandLandmarker.create_from_options, hand_opts, "Hand")
+        self._pose_lm = _try_create(vision.PoseLandmarker.create_from_options, pose_opts, "Pose")
+        self._face_lm = _try_create(vision.FaceLandmarker.create_from_options, face_opts, "Face")
 
     def process(self, frame_rgb: np.ndarray) -> TrackingResult:
         """Process one frame. frame_rgb must be an RGB uint8 array (Gradio webcam convention)."""
         t = time.perf_counter()
-        with self._lock:
-            results = self._holistic.process(frame_rgb)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
 
-        right_pos = _extract_hand_pos(results.right_hand_landmarks, mirror=False)
-        left_pos = _extract_hand_pos(results.left_hand_landmarks, mirror=False)
-        shoulders = _extract_shoulders(results.pose_landmarks)
+        with self._lock:
+            hand_res = self._hand_lm.detect(mp_image)
+            pose_res = self._pose_lm.detect(mp_image)
+            face_res = self._face_lm.detect(mp_image)
+
+        # Map hands to person-anatomical left/right.
+        # The frame is selfie-mirrored before being passed here, so the Tasks API's
+        # perspective-based handedness label is flipped: model "Left" = person's right.
+        right_lm, left_lm = None, None
+        for i, lm_list in enumerate(hand_res.hand_landmarks):
+            label = hand_res.handedness[i][0].category_name
+            if label == "Left":   # mirrored image → person's right hand
+                right_lm = lm_list
+            else:                  # mirrored image → person's left hand
+                left_lm = lm_list
+
+        pose_lm = pose_res.pose_landmarks[0] if pose_res.pose_landmarks else None
+        face_lm = face_res.face_landmarks[0] if face_res.face_landmarks else None
 
         return TrackingResult(
-            right_hand_pos=right_pos,
-            left_hand_pos=left_pos,
-            right_hand_landmarks=results.right_hand_landmarks,
-            left_hand_landmarks=results.left_hand_landmarks,
-            shoulders=shoulders,
-            pose_landmarks=results.pose_landmarks,
+            right_hand_pos=_extract_hand_pos(right_lm),
+            left_hand_pos=_extract_hand_pos(left_lm),
+            right_hand_landmarks=right_lm,
+            left_hand_landmarks=left_lm,
+            face_landmarks=face_lm,
+            shoulders=_extract_shoulders(pose_lm),
+            pose_landmarks=pose_lm,
             frame_time=t,
         )
 
     def close(self):
-        self._holistic.close()
+        self._hand_lm.close()
+        self._pose_lm.close()
+        self._face_lm.close()
 
 
-def _extract_hand_pos(landmarks, mirror: bool = True) -> tuple | None:
+def _extract_hand_pos(landmarks) -> tuple | None:
     if landmarks is None:
         return None
-    pts = [landmarks.landmark[i] for i in PALM_LANDMARKS]
-    x = float(np.mean([p.x for p in pts]))
-    y = float(np.mean([p.y for p in pts]))
-    if mirror:
-        x = 1.0 - x
-    return (x, y)
+    pts = [landmarks[i] for i in PALM_LANDMARKS]
+    return (float(np.mean([p.x for p in pts])), float(np.mean([p.y for p in pts])))
 
 
 def _extract_shoulders(pose_landmarks) -> tuple | None:
     if pose_landmarks is None:
         return None
-    lm = pose_landmarks.landmark
-    r = lm[12]
-    l = lm[11]
+    r = pose_landmarks[12]
+    l = pose_landmarks[11]
     return ((r.x, r.y), (l.x, l.y))
 
 

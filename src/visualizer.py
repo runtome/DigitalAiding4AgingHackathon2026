@@ -12,32 +12,96 @@ _FLASH_GREEN = (0, 200, 0)
 _FLASH_RED = (0, 0, 220)
 _HUD_COLOR = (255, 255, 255)
 
-# Upper-body skeleton connections (MediaPipe Pose landmark indices)
-_POSE_CONNECTIONS = [
-    (11, 12),           # shoulder bar
-    (11, 13), (13, 15), # left arm
-    (12, 14), (14, 16), # right arm
-    (11, 23), (12, 24), # torso sides
-    (23, 24),           # hip bar
+# ── Skeleton / mesh connection lists (MediaPipe Tasks API landmark indices) ───
+
+_HAND_CONNECTIONS = [
+    (0, 1), (1, 2), (2, 3), (3, 4),
+    (0, 5), (5, 6), (6, 7), (7, 8),
+    (5, 9), (9, 10), (10, 11), (11, 12),
+    (9, 13), (13, 14), (14, 15), (15, 16),
+    (13, 17), (17, 18), (18, 19), (19, 20),
+    (0, 17),
 ]
-_POSE_JOINTS = [11, 12, 13, 14, 15, 16, 23, 24]
+
+_POSE_CONNECTIONS = [
+    (0, 1), (1, 2), (2, 3), (3, 7), (0, 4), (4, 5), (5, 6), (6, 8),  # head
+    (9, 10),                                                              # mouth
+    (11, 12),                                                             # shoulders
+    (11, 13), (13, 15), (15, 17), (17, 19), (19, 15), (15, 21),         # left arm
+    (12, 14), (14, 16), (16, 18), (18, 20), (20, 16), (16, 22),         # right arm
+    (11, 23), (12, 24), (23, 24),                                         # torso
+    (23, 25), (25, 27), (27, 29), (29, 31), (31, 27),                   # left leg
+    (24, 26), (26, 28), (28, 30), (30, 32), (32, 28),                   # right leg
+]
+
+_FACE_OVAL = [
+    (10, 338), (338, 297), (297, 332), (332, 284), (284, 251), (251, 389),
+    (389, 356), (356, 454), (454, 323), (323, 361), (361, 288), (288, 397),
+    (397, 365), (365, 379), (379, 378), (378, 400), (400, 377), (377, 152),
+    (152, 148), (148, 176), (176, 149), (149, 150), (150, 136), (136, 172),
+    (172, 58), (58, 132), (132, 93), (93, 234), (234, 127), (127, 162),
+    (162, 21), (21, 54), (54, 103), (103, 67), (67, 109), (109, 10),
+]
+_LEFT_EYE = [
+    (263, 249), (249, 390), (390, 373), (373, 374), (374, 380), (380, 381),
+    (381, 382), (382, 362), (362, 398), (398, 384), (384, 385), (385, 386),
+    (386, 387), (387, 388), (388, 466), (466, 263),
+]
+_RIGHT_EYE = [
+    (33, 7), (7, 163), (163, 144), (144, 145), (145, 153), (153, 154),
+    (154, 155), (155, 133), (133, 173), (173, 157), (157, 158), (158, 159),
+    (159, 160), (160, 161), (161, 246), (246, 33),
+]
+_LIPS = [
+    (61, 146), (146, 91), (91, 181), (181, 84), (84, 17), (17, 314),
+    (314, 405), (405, 321), (321, 375), (375, 291),
+    (61, 185), (185, 40), (40, 39), (39, 37), (37, 0), (0, 267),
+    (267, 269), (269, 270), (270, 291),
+    (78, 95), (95, 88), (88, 178), (178, 87), (87, 14), (14, 317),
+    (317, 402), (402, 318), (318, 324), (324, 308),
+    (78, 191), (191, 80), (80, 81), (81, 82), (82, 13), (13, 312),
+    (312, 311), (311, 310), (310, 415), (415, 308),
+]
+_FACE_CONNECTIONS = _FACE_OVAL + _LEFT_EYE + _RIGHT_EYE + _LIPS
 
 
-def draw_pose_keypoints(out: np.ndarray, pose_landmarks) -> np.ndarray:
-    if pose_landmarks is None:
-        return out
-    H, W = out.shape[:2]
-    lm = pose_landmarks.landmark
-    for a, b in _POSE_CONNECTIONS:
-        if lm[a].visibility > 0.4 and lm[b].visibility > 0.4:
-            ax, ay = int(lm[a].x * W), int(lm[a].y * H)
-            bx, by = int(lm[b].x * W), int(lm[b].y * H)
-            cv2.line(out, (ax, ay), (bx, by), (0, 200, 255), 2, cv2.LINE_AA)
-    for idx in _POSE_JOINTS:
-        if lm[idx].visibility > 0.4:
-            px, py = int(lm[idx].x * W), int(lm[idx].y * H)
-            cv2.circle(out, (px, py), 6, (0, 200, 255), -1)
-            cv2.circle(out, (px, py), 6, (255, 255, 255), 1)
+def _draw_connections(img, landmarks, connections, color, thickness=1):
+    H, W = img.shape[:2]
+    pts = [(int(lm.x * W), int(lm.y * H)) for lm in landmarks]
+    for a, b in connections:
+        if a < len(pts) and b < len(pts):
+            cv2.line(img, pts[a], pts[b], color, thickness, cv2.LINE_AA)
+
+
+def _draw_dots(img, landmarks, color, radius=3):
+    H, W = img.shape[:2]
+    for lm in landmarks:
+        cv2.circle(img, (int(lm.x * W), int(lm.y * H)), radius, color, -1)
+
+
+def draw_body_overlays(
+    out: np.ndarray,
+    pose_landmarks=None,
+    right_hand_landmarks=None,
+    left_hand_landmarks=None,
+    face_landmarks=None,
+) -> np.ndarray:
+    """Draw pose skeleton, hand skeletons, and face mesh on a BGR frame."""
+    if pose_landmarks is not None:
+        _draw_connections(out, pose_landmarks, _POSE_CONNECTIONS, (0, 120, 255), 2)
+        _draw_dots(out, pose_landmarks, (0, 165, 255), 4)
+
+    for hand_lm, color in [
+        (right_hand_landmarks, (0, 220, 0)),
+        (left_hand_landmarks, (255, 120, 80)),
+    ]:
+        if hand_lm is not None:
+            _draw_connections(out, hand_lm, _HAND_CONNECTIONS, color, 2)
+            _draw_dots(out, hand_lm, color, 3)
+
+    if face_landmarks is not None:
+        _draw_connections(out, face_landmarks, _FACE_CONNECTIONS, (50, 150, 200), 1)
+
     return out
 
 
@@ -102,11 +166,18 @@ def _draw_grid(out, x0, y0, x1, y1, target=-1, dwell=0, color=(200, 200, 200)):
         _draw_bbox_corners(out, cx0, cy0, cx1, cy1, (255, 255, 0), length=32, thick=5)
 
 
-def draw_countdown_overlay(frame: np.ndarray, pose_landmarks=None, count: int = 3) -> np.ndarray:
+def draw_countdown_overlay(
+    frame: np.ndarray,
+    pose_landmarks=None,
+    count: int = 3,
+    right_hand_landmarks=None,
+    left_hand_landmarks=None,
+    face_landmarks=None,
+) -> np.ndarray:
     """Show 3-2-1 countdown before test starts."""
     out = frame.copy()
     H, W = out.shape[:2]
-    draw_pose_keypoints(out, pose_landmarks)
+    draw_body_overlays(out, pose_landmarks, right_hand_landmarks, left_hand_landmarks, face_landmarks)
     _draw_grid(out, 0, 0, W, H, target=-1, dwell=0, color=(120, 120, 120))
 
     # Dark vignette to make number pop
@@ -140,6 +211,9 @@ def draw_overlay(
     right_pos: tuple | None,
     left_pos: tuple | None,
     pose_landmarks=None,
+    right_hand_landmarks=None,
+    left_hand_landmarks=None,
+    face_landmarks=None,
 ) -> np.ndarray:
     out = frame.copy()
     H, W = out.shape[:2]
@@ -154,8 +228,8 @@ def draw_overlay(
         cv2.rectangle(overlay, (0, 0), (W, H), flash_col, -1)
         cv2.addWeighted(overlay, 0.28, out, 0.72, 0, out)
 
-    # Skeleton keypoints (drawn before grid so grid is on top)
-    draw_pose_keypoints(out, pose_landmarks)
+    # Body overlays (pose, hands, face) drawn before grid so grid renders on top
+    draw_body_overlays(out, pose_landmarks, right_hand_landmarks, left_hand_landmarks, face_landmarks)
 
     # 3x3 grid with cell numbers
     target = state.current_target if state else -1
@@ -215,12 +289,20 @@ def draw_overlay(
     return out
 
 
-def draw_preview_overlay(frame: np.ndarray, grid_bounds: tuple, pose_detected: bool, pose_landmarks=None) -> np.ndarray:
+def draw_preview_overlay(
+    frame: np.ndarray,
+    grid_bounds: tuple,
+    pose_detected: bool,
+    pose_landmarks=None,
+    right_hand_landmarks=None,
+    left_hand_landmarks=None,
+    face_landmarks=None,
+) -> np.ndarray:
     out = frame.copy()
     H, W = out.shape[:2]
 
-    # Skeleton first, grid on top
-    draw_pose_keypoints(out, pose_landmarks)
+    # Body overlays first, grid on top
+    draw_body_overlays(out, pose_landmarks, right_hand_landmarks, left_hand_landmarks, face_landmarks)
     _draw_grid(out, 0, 0, W, H, target=-1, dwell=0, color=(220, 220, 220))
 
     # Status bar at top
