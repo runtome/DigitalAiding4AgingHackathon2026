@@ -8,7 +8,7 @@ import gradio as gr
 from src.assessment_runner import AssessmentRunner
 from src.game_engine import GameEngine, GameState
 from src.motion_analyzer import MotionAnalyzer
-from src.report_generator import export_csv, export_pdf
+from src.report_generator import export_pdf
 from src.tracker import HandTracker
 from src.visualizer import (
     make_accuracy_chart,
@@ -121,7 +121,7 @@ def check_game_over(state: GameState):
 
 def handle_export(state: GameState, analysis):
     if state is None or not state.events or analysis is None:
-        return None, None
+        return None
     charts_for_pdf = {
         "Speed Analysis":   make_speed_chart(state.events),
         "Accuracy by Zone": make_accuracy_chart(state.events),
@@ -129,15 +129,21 @@ def handle_export(state: GameState, analysis):
         "Motor Age":        make_motor_age_gauge(analysis.motor_age, state.participant_age),
         "Gantt":            make_gantt_chart(state.events, state.duration_s),
     }
-    csv_path = export_csv(state.events)
-    pdf_path = export_pdf(analysis, charts_for_pdf, state)
-    return csv_path, pdf_path
+    return export_pdf(analysis, charts_for_pdf, state)
 
 
 # ─── Gradio UI ───────────────────────────────────────────────────────────────
 
 CSS = """
 .gr-group { border-radius: 10px; padding: 12px; }
+.gradio-container { font-size: 16px; }
+.gradio-container p,
+.gradio-container label,
+.gradio-container .label-wrap span,
+.gradio-container .prose { font-size: 16px !important; }
+.gradio-container button { font-size: 15px !important; }
+.gradio-container input,
+.gradio-container select { font-size: 15px !important; }
 """
 
 with gr.Blocks(title="Upper Limb Dexterity Assessment") as demo:
@@ -213,8 +219,7 @@ with gr.Blocks(title="Upper Limb Dexterity Assessment") as demo:
             wrap=True,
         )
         with gr.Row():
-            export_btn   = gr.Button("📥 Generate PDF & CSV Report", variant="primary")
-            download_csv = gr.File(label="CSV Data")
+            export_btn   = gr.Button("📥 Generate PDF Report", variant="primary")
             download_pdf = gr.File(label="PDF Report")
 
     # Timer polls for assessment completion every second
@@ -268,7 +273,7 @@ with gr.Blocks(title="Upper Limb Dexterity Assessment") as demo:
     export_btn.click(
         fn=handle_export,
         inputs=[game_state, analysis_res],
-        outputs=[download_csv, download_pdf],
+        outputs=[download_pdf],
     )
 
 if __name__ == "__main__":

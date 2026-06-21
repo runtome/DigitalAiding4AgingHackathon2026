@@ -37,9 +37,13 @@ An AI-powered reaching-task tool that assesses upper limb dexterity via webcam. 
 | `gradio` | 6.19.0 | Web UI |
 | `mediapipe` | 0.10.21 | Hand & pose tracking |
 | `opencv-python` | 4.10.0.84 | Video processing & assessment window |
+| `numpy` | ≥ 1.26, < 2.0 | Numerical computation |
+| `pandas` | ≥ 2.2 | Event log table & data export |
 | `plotly` | ≥ 5.22 | Analysis charts |
-| `fpdf2` | ≥ 2.8 | PDF report export |
-| `scipy` | ≥ 1.13 | Signal analysis (FFT, interpolation) |
+| `scipy` | ≥ 1.13 | Signal analysis (FFT, interpolation, statistics) |
+| `fpdf2` | ≥ 2.8 | PDF report generation |
+| `Pillow` | ≥ 10.3 | Image handling |
+| `kaleido` | 0.2.1 | Plotly → PNG conversion for PDF charts |
 
 ---
 
@@ -59,12 +63,12 @@ python app.py
 
 Open your browser at `http://localhost:7860`, then follow these steps:
 
-1. **Fill in test setup** — Choose duration, hands to assess, name, and age (optional)
+1. **Fill in test setup** — Choose duration, hands to assess, name, and age (default 45)
 2. **Start Assessment** — Click **▶ Start Assessment** (3-2-1 countdown begins)
 3. **Open Live Video** — Click **🎥 Open Live Video** to launch the fullscreen assessment window
 4. **Reach targets** — Reach your hand to each highlighted yellow zone; it turns green on success with a chime sound
 5. **View results** — After time expires the window closes automatically and the analysis panel appears
-6. **Export report** — Click **📥 Generate PDF & CSV Report** to download
+6. **Export report** — Click **📥 Generate PDF Report** to download the PDF
 7. **Restart** — Click **▶ Start Assessment** again to run another session
 
 > **Tip:** Stand 2–3 m from the camera so your full body and both hands are visible.
@@ -79,8 +83,8 @@ config.py                 All tunable scoring thresholds (see below)
 src/tracker.py            HandTracker (MediaPipe), grid cell mapping
 src/game_engine.py        GameState machine, hit/timeout detection
 src/motion_analyzer.py    Post-game metrics (speed, accuracy, quality, LNU, motor age)
-src/visualizer.py         OpenCV overlays, Plotly charts, event log table
-src/report_generator.py   CSV / PDF export
+src/visualizer.py         OpenCV overlays, Plotly charts, event log table, statistical analysis
+src/report_generator.py   PDF report export (with embedded charts)
 src/run_assessment.py     Standalone subprocess for fullscreen cv2 window (Windows)
 src/assessment_runner.py  Subprocess launcher & IPC (pickle + sentinel file)
 ```
@@ -112,7 +116,7 @@ The 3×3 grid covers the full camera frame:
 └──────────┴──────────┴──────────┘
 ```
 
-Corner cells (1,3,7,9) are weighted 1.5× for selection; center (5) is weighted 0.5×.
+Corner cells (1, 3, 7, 9) are weighted 1.5× for selection; center (5) is weighted 0.5×.
 
 ---
 
@@ -121,7 +125,7 @@ Corner cells (1,3,7,9) are weighted 1.5× for selection; center (5) is weighted 
 ### 1. Speed Score (0–100)
 
 Linear mapping of mean reaction time to a 0–100 score.  
-Default range: **350 ms → score 100**, **800 ms → score 0**.  
+Default range: **500 ms → score 100**, **2000 ms → score 0** (calibrated for reaching tasks with aging adults).  
 Configurable via `SPEED_RT_BEST_MS` and `SPEED_RT_RANGE_MS` in `config.py`.
 
 ### 2. Accuracy Score (0–100)
@@ -157,7 +161,7 @@ Compares the composite scores of both hands:
 - Left composite − Right composite > `DOMINANCE_MARGIN` → **Left-Handed**
 - Difference ≤ `DOMINANCE_MARGIN` → **Inconclusive / Ambidextrous**
 
-Default `DOMINANCE_MARGIN = 2` (very sensitive; raise to 5–10 to require a clearer gap).
+Default `DOMINANCE_MARGIN = 2` (raise to 5–10 to require a clearer performance gap).
 
 ### 6. LNU Risk Score (0–100)
 
@@ -185,6 +189,19 @@ TremorAdjustment = max(0, TremorPower − 10) / 5
 Range: 20 (excellent) to ~85+ (severe impairment).  
 Compared to the participant's chronological age when provided.
 
+### 8. Reaction Time Normal Distribution Analysis (Speed Tab)
+
+Shown below the boxplot in the Speed tab. For each hand it fits a Gaussian PDF to the RT samples and displays:
+
+- **Overlaid curves** with colour-coded mean lines (dashed)
+- **Descriptive statistics table** — N, μ, median, σ, σ², min, max, 95% CI, CV%
+- **Normality test** — Shapiro-Wilk W statistic and p-value per hand
+- **Hypothesis test** — Paired t-test (both normal) or Wilcoxon Signed-Rank (otherwise), with test statistic, p-value, and significance verdict
+- **Cohen's d** — pooled effect size with Negligible / Small / Medium / Large classification
+- **Summary card** — faster hand, mean difference (ms), % difference, statistical significance, effect size
+
+All thresholds (CI level, α, Cohen's d tiers) are configurable in `config.py`.
+
 ---
 
 ## Configuration (`config.py`)
@@ -196,12 +213,12 @@ All scoring thresholds are centralised in `config.py` at the project root.
 
 | Constant | Default | Meaning |
 |---|---|---|
-| `SPEED_RT_BEST_MS` | `350` | Reaction time (ms) that earns a perfect speed score of 100. Any RT at or below this value → score 100. |
-| `SPEED_RT_RANGE_MS` | `450` | The ms span over which the score falls from 100 to 0. Worst RT = `SPEED_RT_BEST_MS + SPEED_RT_RANGE_MS` = 800 ms → score 0. |
+| `SPEED_RT_BEST_MS` | `500` | Reaction time (ms) at or below which the speed score is 100. Calibrated for reaching tasks: fast adults reach in ~500 ms. |
+| `SPEED_RT_RANGE_MS` | `1500` | The ms span over which the score falls from 100 to 0. Worst RT = `SPEED_RT_BEST_MS + SPEED_RT_RANGE_MS` = 2000 ms → score 0. |
 
 Formula: `score = clamp(100 − (RT − SPEED_RT_BEST_MS) / SPEED_RT_RANGE_MS × 100, 0, 100)`
 
-**Example:** RT = 600 ms → `100 − (600−350)/450×100 = 44.4`
+**Example:** RT = 1138 ms → `100 − (1138 − 500) / 1500 × 100 ≈ 57`
 
 ---
 
@@ -221,9 +238,9 @@ Must sum to 1.0.
 
 | Constant | Default | Meaning |
 |---|---|---|
-| `JERK_LOG_MULTIPLIER` | `15` | Sensitivity of the jerk score. Higher value → score drops faster as NJS increases (more sensitive to jerky movement). Formula: `score = clamp(100 − log(1+NJS) × JERK_LOG_MULTIPLIER, 0, 100)` |
-| `JERK_MIN_TRAJ_PTS` | `5` | Minimum number of trajectory points required to compute jerk. Fewer points → fallback score used. |
-| `JERK_DEFAULT_SCORE` | `50.0` | Fallback jerk score used when the trajectory is too short to compute NJS. |
+| `JERK_LOG_MULTIPLIER` | `6` | Sensitivity of the jerk score. Higher value → score drops faster as NJS increases. Formula: `score = clamp(100 − log(1+NJS) × JERK_LOG_MULTIPLIER, 0, 100)`. Calibrated for Savitzky-Golay-smoothed trajectories from webcam data. |
+| `JERK_MIN_TRAJ_PTS` | `5` | Minimum trajectory points required to compute jerk. Fewer points → fallback score. |
+| `JERK_DEFAULT_SCORE` | `50.0` | Fallback jerk score when trajectory is too short to compute NJS. |
 
 ---
 
@@ -231,11 +248,11 @@ Must sum to 1.0.
 
 | Constant | Default | Meaning |
 |---|---|---|
-| `TREMOR_FS_HZ` | `10.0` | Resample frequency (Hz) used to create a uniform-time signal from the hand trajectory before FFT. |
-| `TREMOR_BAND_LO_HZ` | `3.0` | Lower bound of the tremor frequency band (Hz). Tremor energy below this is ignored. |
-| `TREMOR_BAND_HI_HZ` | `7.0` | Upper bound of the tremor frequency band (Hz). The 3–7 Hz range covers pathological tremor (Parkinson's, essential tremor). |
-| `TREMOR_MIN_DURATION_S` | `0.5` | Minimum trajectory duration (seconds) required to compute tremor. Shorter trajectories → tremor power = 0. |
-| `TREMOR_MIN_POINTS` | `8` | Minimum number of trajectory points required to compute tremor. Fewer points → tremor power = 0. |
+| `TREMOR_FS_HZ` | `10.0` | Resample frequency (Hz) for uniform-time signal before FFT. |
+| `TREMOR_BAND_LO_HZ` | `4.5` | Lower bound of the tremor frequency band (Hz). Set to 4.5 Hz to exclude normal arm-swing frequency (1–4 Hz) which otherwise causes false tremor readings. |
+| `TREMOR_BAND_HI_HZ` | `7.0` | Upper bound of the tremor frequency band (Hz). The 4.5–7 Hz range targets pathological tremor (Parkinson's, essential tremor). |
+| `TREMOR_MIN_DURATION_S` | `1.5` | Minimum trajectory duration (s) to compute tremor. Shorter reaches return 0 — fewer than ~15 FFT points gives unreliable frequency resolution. |
+| `TREMOR_MIN_POINTS` | `15` | Minimum trajectory points to compute tremor. Fewer → tremor power = 0. |
 
 ---
 
@@ -255,7 +272,7 @@ Must sum to 1.0.
 
 | Constant | Default | Meaning |
 |---|---|---|
-| `DOMINANCE_MARGIN` | `2` | Minimum composite score difference (Right − Left, or Left − Right) required to declare a dominant hand. If the gap ≤ this value, result is "Inconclusive / Ambidextrous". Increase to 5–10 to require a clearer performance difference. |
+| `DOMINANCE_MARGIN` | `2` | Minimum composite score gap required to declare a dominant hand. Gap ≤ this → "Inconclusive / Ambidextrous". Raise to 5–10 for a stricter threshold. |
 
 ---
 
@@ -263,12 +280,12 @@ Must sum to 1.0.
 
 | Constant | Default | Meaning |
 |---|---|---|
-| `LNU_WEIGHT_USE_ASYM` | `0.5` | Weight of usage asymmetry (hit count difference between hands) in the LNU score (50%). |
-| `LNU_WEIGHT_RT_ASYM` | `0.3` | Weight of reaction-time asymmetry between hands in the LNU score (30%). |
-| `LNU_WEIGHT_QUAL_ASYM` | `0.2` | Weight of quality (composite) asymmetry between hands in the LNU score (20%). |
-| `LNU_THRESHOLD_LOW` | `33` | LNU scores below this → "Low" risk tier. |
-| `LNU_THRESHOLD_HIGH` | `67` | LNU scores at or above this → "High" risk tier. Scores between LOW and HIGH → "Moderate". |
-| `LNU_MIN_BILATERAL_HITS` | `3` | Minimum successful hits **per hand** required to compute LNU. If either hand has fewer hits, LNU is shown as N/A. |
+| `LNU_WEIGHT_USE_ASYM` | `0.5` | Weight of usage asymmetry (hit count difference between hands) in the LNU score. |
+| `LNU_WEIGHT_RT_ASYM` | `0.3` | Weight of reaction-time asymmetry between hands. |
+| `LNU_WEIGHT_QUAL_ASYM` | `0.2` | Weight of composite quality asymmetry between hands. |
+| `LNU_THRESHOLD_LOW` | `33` | LNU scores below this → "Low" risk. |
+| `LNU_THRESHOLD_HIGH` | `67` | LNU scores at or above this → "High" risk. Between LOW and HIGH → "Moderate". |
+| `LNU_MIN_BILATERAL_HITS` | `3` | Minimum successful hits **per hand** required to compute LNU. Fewer → N/A. |
 
 ---
 
@@ -276,10 +293,10 @@ Must sum to 1.0.
 
 | Constant | Default | Meaning |
 |---|---|---|
-| `MOTOR_AGE_BASE_MIN` | `20` | Estimated motor age when composite score = 100 (excellent performance). The scale starts at 20 years. |
-| `MOTOR_AGE_RANGE` | `65` | Span of the motor age scale. Motor age = `BASE_MIN` (20) to `BASE_MIN + RANGE` (85) as composite score falls from 100 to 0. |
-| `MOTOR_AGE_TREMOR_THRESH` | `10` | Tremor power (%) below which no age penalty is added. Tremor ≤ this value contributes 0 extra years. |
-| `MOTOR_AGE_TREMOR_DIVISOR` | `5` | Divisor for the tremor age penalty: `penalty = (TremorPower − THRESH) / DIVISOR` years. Default: each 5% of excess tremor adds 1 estimated year. |
+| `MOTOR_AGE_BASE_MIN` | `20` | Estimated motor age when composite = 100 (excellent). |
+| `MOTOR_AGE_RANGE` | `65` | Age span: motor age ranges from 20 to 85 as composite falls from 100 to 0. |
+| `MOTOR_AGE_TREMOR_THRESH` | `10` | Tremor power (%) below which no age penalty is added. |
+| `MOTOR_AGE_TREMOR_DIVISOR` | `5` | Each 5% of excess tremor adds 1 estimated year to motor age. |
 
 Formula:
 ```
@@ -287,6 +304,19 @@ MotorAge = MOTOR_AGE_BASE_MIN
          + (100 − BestComposite) / 100 × MOTOR_AGE_RANGE
          + max(0, TremorPower − MOTOR_AGE_TREMOR_THRESH) / MOTOR_AGE_TREMOR_DIVISOR
 ```
+
+---
+
+### Statistical Analysis
+
+| Constant | Default | Meaning |
+|---|---|---|
+| `STATS_CI_LEVEL` | `0.95` | Confidence interval level for the descriptive stats table (e.g., 0.95 = 95% CI). Change to 0.90 or 0.99 as needed. |
+| `STATS_NORMALITY_ALPHA` | `0.05` | p-value threshold for the Shapiro-Wilk test. p > this → distribution is considered normal → Paired t-test is used. |
+| `STATS_SIGNIFICANCE_ALPHA` | `0.05` | p-value threshold for the hypothesis test. p < this → result is "statistically significant". |
+| `COHEN_D_NEGLIGIBLE` | `0.2` | Cohen's d below this → "Negligible" effect size. |
+| `COHEN_D_SMALL` | `0.5` | Cohen's d below this → "Small" effect size. |
+| `COHEN_D_MEDIUM` | `0.8` | Cohen's d below this → "Medium" effect size; at or above → "Large". |
 
 ---
 

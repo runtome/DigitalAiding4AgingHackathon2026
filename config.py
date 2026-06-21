@@ -2,8 +2,8 @@
 
 # ── Speed Scoring ──────────────────────────────────────────────────────────────
 # Linear map: BEST_MS → score 100, (BEST_MS + RANGE_MS) → score 0
-SPEED_RT_BEST_MS   = 350   # reaction time (ms) that earns a perfect speed score
-SPEED_RT_RANGE_MS  = 450   # ms span over which score falls from 100 to 0
+SPEED_RT_BEST_MS   = 500    # reaction time (ms) that earns a perfect speed score
+SPEED_RT_RANGE_MS  = 1500   # ms span over which score falls from 100 to 0  (worst = 2000 ms)
 
 # ── Quality Component Weights ─────────────────────────────────────────────────
 # Must sum to 1.0
@@ -13,16 +13,16 @@ QUALITY_WEIGHT_TREMOR     = 0.2   # applied as (100 - tremor_score)
 
 # ── Jerk Score ────────────────────────────────────────────────────────────────
 # score = clamp(100 - log1p(NJS) * JERK_LOG_MULTIPLIER, 0, 100)
-JERK_LOG_MULTIPLIER  = 15
+JERK_LOG_MULTIPLIER  = 6       # recalibrated for Savitzky-Golay-smoothed trajectories
 JERK_MIN_TRAJ_PTS    = 5      # minimum trajectory points to compute jerk
 JERK_DEFAULT_SCORE   = 50.0   # fallback when trajectory is too short
 
 # ── Tremor ────────────────────────────────────────────────────────────────────
 TREMOR_FS_HZ          = 10.0   # resample frequency in Hz
-TREMOR_BAND_LO_HZ     = 3.0    # tremor band lower bound (Hz)
+TREMOR_BAND_LO_HZ     = 4.5    # tremor band lower bound (Hz); excludes arm-swing frequency
 TREMOR_BAND_HI_HZ     = 7.0    # tremor band upper bound (Hz)
-TREMOR_MIN_DURATION_S = 0.5    # minimum trajectory duration (s) to compute tremor
-TREMOR_MIN_POINTS     = 8      # minimum trajectory points to compute tremor
+TREMOR_MIN_DURATION_S = 1.5    # minimum trajectory duration (s); short reaches return 0 (FFT unreliable)
+TREMOR_MIN_POINTS     = 15     # minimum trajectory points to compute tremor
 
 # ── Composite Score Weights ───────────────────────────────────────────────────
 # Must sum to 1.0
@@ -52,3 +52,11 @@ MOTOR_AGE_RANGE           = 65    # span: motor age ranges from BASE_MIN to BASE
 # Tremor age penalty: (tremor_power - THRESH) / DIVISOR  (clamped to ≥ 0)
 MOTOR_AGE_TREMOR_THRESH   = 10    # tremor power % below which no age penalty
 MOTOR_AGE_TREMOR_DIVISOR  = 5
+
+# ── Statistical Analysis ──────────────────────────────────────────────────────
+STATS_CI_LEVEL           = 0.95   # Confidence interval level for descriptive stats
+STATS_NORMALITY_ALPHA    = 0.05   # p-value cutoff for Shapiro-Wilk: above this → "normal"
+STATS_SIGNIFICANCE_ALPHA = 0.05   # p-value cutoff for hypothesis test significance
+COHEN_D_NEGLIGIBLE       = 0.2    # Cohen's d below this → Negligible effect
+COHEN_D_SMALL            = 0.5    # Cohen's d below this → Small effect
+COHEN_D_MEDIUM           = 0.8    # Cohen's d below this → Medium; at/above → Large

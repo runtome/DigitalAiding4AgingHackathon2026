@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from scipy.fft import fft, fftfreq
 from scipy.interpolate import interp1d
+from scipy.signal import savgol_filter
 
 from config import (
     SPEED_RT_BEST_MS, SPEED_RT_RANGE_MS,
@@ -180,6 +181,14 @@ def _compute_jerk_score(traj: list) -> float:
     times = np.array([p["t"] for p in traj])
     xs = np.array([p["x"] for p in traj])
     ys = np.array([p["y"] for p in traj])
+
+    # Suppress MediaPipe tracking noise before numerical differentiation
+    win = min(len(xs), 9)
+    if win % 2 == 0:
+        win -= 1
+    if win >= 5:
+        xs = savgol_filter(xs, window_length=win, polyorder=3)
+        ys = savgol_filter(ys, window_length=win, polyorder=3)
 
     dt = np.diff(times)
     dt = np.where(dt < 1e-6, 1e-6, dt)
