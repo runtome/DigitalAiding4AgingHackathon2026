@@ -13,6 +13,8 @@ from src.tracker import HandTracker
 from src.visualizer import (
     make_accuracy_chart,
     make_dominance_chart,
+    make_dominance_prediction_md,
+    make_event_log_df,
     make_gantt_chart,
     make_lnu_gauge,
     make_motor_age_gauge,
@@ -41,6 +43,7 @@ def handle_start(duration, hand_side, name, age):
         gr.update(visible=False),       # hide setup_panel
         gr.update(visible=True),        # show assessment_panel
         gr.update(visible=False),       # hide analysis_panel
+        gr.update(visible=False),       # hide prediction_panel
         gr.update(visible=False),       # hide report_panel
         gr.update(interactive=True),    # re-enable open_video_btn for this new game
     )
@@ -60,7 +63,7 @@ def handle_stop(state: GameState):
 
 # ─── Game-over polling ────────────────────────────────────────────────────────
 
-_NO_UPDATE_COUNT = 14   # number of outputs in check_game_over
+_NO_UPDATE_COUNT = 17   # number of outputs in check_game_over
 
 
 def check_game_over(state: GameState):
@@ -78,15 +81,17 @@ def check_game_over(state: GameState):
     state.events = list(state.events)
     state.phase = "analyzed"
 
-    analysis   = MotionAnalyzer().analyze(state)
-    summary_md = make_summary_markdown(analysis, state)
-    speed_fig  = make_speed_chart(state.events)
-    acc_fig    = make_accuracy_chart(state.events)
-    qual_fig   = make_quality_chart(state.events, analysis)
-    dom_fig    = make_dominance_chart(analysis)
-    lnu_fig    = make_lnu_gauge(analysis.lnu_score, analysis.lnu_risk)
-    motor_fig  = make_motor_age_gauge(analysis.motor_age, state.participant_age)
-    gantt_fig  = make_gantt_chart(state.events, state.duration_s)
+    analysis      = MotionAnalyzer().analyze(state)
+    summary_md    = make_summary_markdown(analysis, state)
+    speed_fig     = make_speed_chart(state.events)
+    acc_fig       = make_accuracy_chart(state.events)
+    qual_fig      = make_quality_chart(state.events, analysis)
+    dom_fig       = make_dominance_chart(analysis)
+    lnu_fig       = make_lnu_gauge(analysis.lnu_score, analysis.lnu_risk)
+    motor_fig     = make_motor_age_gauge(analysis.motor_age, state.participant_age)
+    gantt_fig     = make_gantt_chart(state.events, state.duration_s)
+    event_log_df  = make_event_log_df(state.events, state.start_time)
+    dom_pred_md   = make_dominance_prediction_md(analysis)
 
     return (
         analysis,
@@ -98,10 +103,13 @@ def check_game_over(state: GameState):
         lnu_fig,
         motor_fig,
         gantt_fig,
-        gr.update(visible=False),   # assessment_panel
-        gr.update(visible=True),    # analysis_panel
-        gr.update(visible=True),    # report_panel
-        gr.update(visible=True),    # setup_panel (allow restart)
+        event_log_df,                   # event_log_table
+        gr.update(visible=False),       # assessment_panel
+        gr.update(visible=True),        # analysis_panel
+        gr.update(visible=True),        # prediction_panel
+        dom_pred_md,                    # dominant_prediction_md
+        gr.update(visible=True),        # report_panel
+        gr.update(visible=True),        # setup_panel (allow restart)
         state,
     )
 
@@ -112,11 +120,11 @@ def handle_export(state: GameState, analysis):
     if state is None or not state.events or analysis is None:
         return None, None
     charts_for_pdf = {
-        "Speed Analysis":  make_speed_chart(state.events),
+        "Speed Analysis":   make_speed_chart(state.events),
         "Accuracy by Zone": make_accuracy_chart(state.events),
-        "LNU Risk":        make_lnu_gauge(analysis.lnu_score, analysis.lnu_risk),
-        "Motor Age":       make_motor_age_gauge(analysis.motor_age, state.participant_age),
-        "Gantt":           make_gantt_chart(state.events, state.duration_s),
+        "LNU Risk":         make_lnu_gauge(analysis.lnu_score, analysis.lnu_risk),
+        "Motor Age":        make_motor_age_gauge(analysis.motor_age, state.participant_age),
+        "Gantt":            make_gantt_chart(state.events, state.duration_s),
     }
     csv_path = export_csv(state.events)
     pdf_path = export_pdf(analysis, charts_for_pdf, state)
@@ -151,13 +159,13 @@ with gr.Blocks(title="Upper Limb Dexterity Assessment") as demo:
                 )
                 hand_radio = gr.Radio(
                     choices=[("Right Hand", "right"), ("Left Hand", "left"), ("Both Hands", "both")],
-                    value="right",
+                    value="both",
                     label="Hands to Assess",
                     info="Both Hands measures free-choice reaching. LNU risk requires Both Hands with ≥3 hits per hand.",
                 )
             with gr.Column(scale=1):
                 participant_name = gr.Textbox(label="Name (optional)", placeholder="e.g. John Doe")
-                participant_age  = gr.Number(label="Age (optional)", precision=0, minimum=1, maximum=120)
+                participant_age  = gr.Number(label="Age (optional)", precision=0, minimum=1, maximum=120, value=45)
         start_btn = gr.Button("▶  Start Assessment", variant="primary", size="lg")
 
     # ── Assessment Panel ─────────────────────────────────────────────────────
@@ -187,10 +195,19 @@ with gr.Blocks(title="Upper Limb Dexterity Assessment") as demo:
             with gr.Tab("Hand Dominance"):
                 dominance_plot = gr.Plot()
 
+    # ── Dominant Hand Prediction Panel ───────────────────────────────────────
+    with gr.Group(visible=False) as prediction_panel:
+        dominant_prediction_md = gr.Markdown()
+
     # ── Report Panel ─────────────────────────────────────────────────────────
     with gr.Group(visible=False) as report_panel:
         gr.Markdown("### 📄 Report & Export")
         gantt_plot = gr.Plot(label="Reaching Events Timeline")
+        event_log_table = gr.Dataframe(
+            label="Event Log",
+            interactive=False,
+            wrap=True,
+        )
         with gr.Row():
             export_btn   = gr.Button("📥 Generate PDF & CSV Report", variant="primary")
             download_csv = gr.File(label="CSV Data")
@@ -204,7 +221,7 @@ with gr.Blocks(title="Upper Limb Dexterity Assessment") as demo:
     start_btn.click(
         fn=handle_start,
         inputs=[duration_radio, hand_radio, participant_name, participant_age],
-        outputs=[game_state, setup_panel, assessment_panel, analysis_panel, report_panel, open_video_btn],
+        outputs=[game_state, setup_panel, assessment_panel, analysis_panel, prediction_panel, report_panel, open_video_btn],
     )
 
     open_video_btn.click(
@@ -232,8 +249,11 @@ with gr.Blocks(title="Upper Limb Dexterity Assessment") as demo:
             lnu_gauge_plot,
             motor_age_plot,
             gantt_plot,
+            event_log_table,
             assessment_panel,
             analysis_panel,
+            prediction_panel,
+            dominant_prediction_md,
             report_panel,
             setup_panel,
             game_state,

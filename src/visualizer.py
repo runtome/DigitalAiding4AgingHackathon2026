@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from src.tracker import CELL_NAMES
+from config import DOMINANCE_MARGIN
 
 _GRID_COLOR = (255, 255, 255)
 _TARGET_COLOR = (0, 255, 255)   # yellow (BGR)
@@ -561,6 +562,82 @@ def make_motor_age_gauge(motor_age: float | None, actual_age: int | None) -> go.
     ))
     fig.update_layout(height=300, template="plotly_white")
     return fig
+
+
+def make_event_log_df(events: list, start_time: float):
+    """Return a pandas DataFrame of all reaching events for display after the Gantt chart."""
+    import pandas as pd
+
+    if not events:
+        return pd.DataFrame(
+            columns=["#", "Time (s)", "Target", "RT (ms)", "Hand", "Direction", "Efficiency", "Result"]
+        )
+
+    rows = []
+    prev_cell = None
+    for ev in events:
+        t_app   = ev["target_shown_at"] - start_time
+        target  = CELL_NAMES.get(ev["target_cell"], str(ev["target_cell"]))
+        rt      = ev.get("reaction_time_ms")
+        rt_str  = f"{rt:.0f}" if rt is not None else "—"
+        hand    = "Right" if ev["hand"] == "right" else "Left"
+        direction = (
+            f"{CELL_NAMES.get(prev_cell, '?')} → {target}"
+            if prev_cell is not None else "—"
+        )
+        path_len = ev.get("path_length", 0) or 0
+        direct   = ev.get("direct_distance", 0) or 0
+        eff      = f"{direct / path_len * 100:.0f}%" if path_len > 1e-6 else "—"
+
+        rows.append({
+            "#":          ev["event_id"] + 1,
+            "Time (s)":   f"{t_app:.1f}",
+            "Target":     target,
+            "RT (ms)":    rt_str,
+            "Hand":       hand,
+            "Direction":  direction,
+            "Efficiency": eff,
+            "Result":     "✓ Hit" if ev["success"] else "✗ Miss",
+        })
+        prev_cell = ev["target_cell"]
+
+    return pd.DataFrame(rows)
+
+
+def make_dominance_prediction_md(analysis) -> str:
+    """Return markdown text predicting the participant's dominant hand."""
+    if analysis is None:
+        return ""
+
+    dom = getattr(analysis, "dominant_hand", None)
+    cr  = getattr(analysis, "composite_right", 0.0)
+    cl  = getattr(analysis, "composite_left",  0.0)
+
+    if dom in (None, "unknown"):
+        return "**Dominant Hand Prediction:** N/A"
+
+    if dom == "N/A":
+        return (
+            "### Dominant Hand Prediction\n\n"
+            "**N/A** — requires Both Hands mode with sufficient hits per hand."
+        )
+
+    if dom == "right":
+        icon, label = "🟢", "Right-Handed"
+        detail = f"Right composite {cr:.0f} vs Left {cl:.0f} (+{cr - cl:.0f} pts)"
+    elif dom == "left":
+        icon, label = "🟢", "Left-Handed"
+        detail = f"Left composite {cl:.0f} vs Right {cr:.0f} (+{cl - cr:.0f} pts)"
+    else:
+        icon, label = "⚪", "Inconclusive / Ambidextrous"
+        detail = f"Right {cr:.0f} ≈ Left {cl:.0f} (difference < {DOMINANCE_MARGIN} pts)"
+
+    return (
+        f"### {icon} Dominant Hand Prediction\n\n"
+        f"This person appears to be **{label}**.\n\n"
+        f"_{detail}_\n\n"
+        f"> Screening estimate only — not a clinical determination."
+    )
 
 
 def make_summary_markdown(analysis, state) -> str:
