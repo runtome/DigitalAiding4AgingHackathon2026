@@ -373,6 +373,250 @@ def make_speed_chart(events: list) -> go.Figure:
     return fig
 
 
+def make_speed_normal_dist_chart(events: list) -> go.Figure:
+    """Overlaid Gaussian PDFs with descriptive stats and hypothesis test for RT data."""
+    from scipy import stats as sp_stats
+
+    right_rts = np.array([
+        e["reaction_time_ms"] for e in events
+        if e["hand"] == "right" and e["success"] and e["reaction_time_ms"]
+    ], dtype=float)
+    left_rts = np.array([
+        e["reaction_time_ms"] for e in events
+        if e["hand"] == "left" and e["success"] and e["reaction_time_ms"]
+    ], dtype=float)
+
+    has_r = len(right_rts) >= 2
+    has_l = len(left_rts) >= 2
+
+    if not has_r and not has_l:
+        fig = go.Figure()
+        fig.update_layout(
+            title="Reaction Time Normal Distribution Analysis — No data",
+            height=250, template="plotly_white",
+        )
+        return fig
+
+    # ── Descriptive statistics ────────────────────────────────────────────────
+    def _desc(arr):
+        n    = len(arr)
+        mean = float(np.mean(arr))
+        med  = float(np.median(arr))
+        std  = float(np.std(arr, ddof=1))
+        var  = std ** 2
+        mn, mx = float(np.min(arr)), float(np.max(arr))
+        se   = float(sp_stats.sem(arr))
+        ci   = sp_stats.t.interval(0.95, df=n - 1, loc=mean, scale=se)
+        cv   = std / mean * 100 if mean != 0 else 0.0
+        return dict(n=n, mean=mean, med=med, std=std, var=var,
+                    mn=mn, mx=mx, ci_lo=float(ci[0]), ci_hi=float(ci[1]), cv=cv)
+
+    sr = _desc(right_rts) if has_r else None
+    sl = _desc(left_rts)  if has_l else None
+    bilateral = sr is not None and sl is not None
+
+    # ── Subplot layout ────────────────────────────────────────────────────────
+    n_rows      = 3 if bilateral else 2
+    row_heights = [0.42, 0.28, 0.30] if bilateral else [0.50, 0.50]
+    specs = (
+        [[{"colspan": 2, "type": "xy"}, None]] +
+        [[{"colspan": 2, "type": "table"}, None]] * (n_rows - 1)
+    )
+    subtitles = ["Normal Distribution Curves", "Descriptive Statistics"]
+    if bilateral:
+        subtitles.append("Statistical Test Results & Summary")
+
+    fig = make_subplots(
+        rows=n_rows, cols=2,
+        specs=specs,
+        subplot_titles=subtitles,
+        vertical_spacing=0.09,
+        row_heights=row_heights,
+    )
+
+    # ── Gaussian PDF curves + mean lines ──────────────────────────────────────
+    _PALETTE = {
+        "right": ("#2ecc71", "rgba(46,204,113,0.15)"),
+        "left":  ("#3498db", "rgba(52,152,219,0.15)"),
+    }
+    for label, arr, s, (lc, fc) in [
+        ("Right Hand", right_rts, sr, _PALETTE["right"]),
+        ("Left Hand",  left_rts,  sl, _PALETTE["left"]),
+    ]:
+        if s is None:
+            continue
+        x = np.linspace(max(0.0, s["mean"] - 3.5 * s["std"]),
+                        s["mean"] + 3.5 * s["std"], 400)
+        y = sp_stats.norm.pdf(x, s["mean"], s["std"])
+        peak = float(np.max(y))
+
+        fig.add_trace(go.Scatter(
+            x=x, y=y,
+            name=f"{label}  (μ={s['mean']:.0f} ms, σ={s['std']:.0f} ms)",
+            fill="tozeroy", fillcolor=fc,
+            line=dict(color=lc, width=2.5),
+            hovertemplate=f"{label}<br>RT: %{{x:.0f}} ms<br>PDF: %{{y:.5f}}<extra></extra>",
+        ), row=1, col=1)
+
+        # Dashed mean line as a Scatter trace (reliable across subplot versions)
+        fig.add_trace(go.Scatter(
+            x=[s["mean"], s["mean"]], y=[0, peak * 1.08],
+            mode="lines+text",
+            line=dict(color=lc, width=2, dash="dash"),
+            text=["", f"μ={s['mean']:.0f}"],
+            textposition="top center",
+            textfont=dict(color=lc, size=11),
+            showlegend=False,
+        ), row=1, col=1)
+
+    fig.update_xaxes(title_text="Reaction Time (ms)", row=1, col=1)
+    fig.update_yaxes(title_text="Probability Density", row=1, col=1)
+
+    # ── Descriptive statistics table ──────────────────────────────────────────
+    _STAT_ROWS = [
+        ("N (samples)",    "n",     ".0f", ""),
+        ("Mean (μ)",       "mean",  ".1f", "ms"),
+        ("Median",         "med",   ".1f", "ms"),
+        ("Std Dev (σ)",    "std",   ".1f", "ms"),
+        ("Variance (σ²)",  "var",   ".1f", "ms²"),
+        ("Minimum",        "mn",    ".0f", "ms"),
+        ("Maximum",        "mx",    ".0f", "ms"),
+        ("95% CI Lower",   "ci_lo", ".1f", "ms"),
+        ("95% CI Upper",   "ci_hi", ".1f", "ms"),
+        ("CV (%)",         "cv",    ".1f", "%"),
+    ]
+    lbl_col  = [r[0]  for r in _STAT_ROWS]
+    unit_col = [r[3]  for r in _STAT_ROWS]
+    r_col    = [f"{sr[r[1]]:{r[2]}}" if sr else "—" for r in _STAT_ROWS]
+    l_col    = [f"{sl[r[1]]:{r[2]}}" if sl else "—" for r in _STAT_ROWS]
+    _HDR     = "#2c3e50"
+    _FILL    = ["#f0f4f8" if i % 2 == 0 else "#ffffff" for i in range(len(_STAT_ROWS))]
+
+    fig.add_trace(go.Table(
+        header=dict(
+            values=["<b>Statistic</b>", "<b>Unit</b>", "<b>Right Hand</b>", "<b>Left Hand</b>"],
+            fill_color=_HDR, font=dict(color="white", size=12), align="left",
+        ),
+        cells=dict(
+            values=[lbl_col, unit_col, r_col, l_col],
+            fill_color=[_FILL, _FILL, _FILL, _FILL],
+            align=["left", "center", "right", "right"],
+            font=dict(size=11), height=26,
+        ),
+    ), row=2, col=1)
+
+    # ── Statistical tests + summary ───────────────────────────────────────────
+    if bilateral:
+        # Shapiro-Wilk normality test
+        def _shapiro(arr):
+            if len(arr) < 3:
+                return None, None, False
+            st, pv = sp_stats.shapiro(arr)
+            return float(st), float(pv), bool(pv > 0.05)
+
+        sw_r_s, sw_r_p, r_norm = _shapiro(right_rts)
+        sw_l_s, sw_l_p, l_norm = _shapiro(left_rts)
+
+        # Choose the paired test; use min-length prefix for pairing
+        n_min  = min(len(right_rts), len(left_rts))
+        pr, pl = right_rts[:n_min], left_rts[:n_min]
+
+        try:
+            if r_norm and l_norm and n_min >= 3:
+                test_name = "Paired t-test"
+                ts, pv_t = sp_stats.ttest_rel(pr, pl)
+            elif n_min >= 3:
+                test_name = "Wilcoxon Signed-Rank Test"
+                ts, pv_t = sp_stats.wilcoxon(pr, pl, zero_method="wilcox")
+            else:
+                test_name = "Mann-Whitney U Test"
+                ts, pv_t = sp_stats.mannwhitneyu(right_rts, left_rts, alternative="two-sided")
+            ts, pv_t = float(ts), float(pv_t)
+        except Exception:
+            test_name, ts, pv_t = "N/A", float("nan"), float("nan")
+
+        sig_str = (
+            "✓ Significant (p < 0.05)" if (not np.isnan(pv_t) and pv_t < 0.05)
+            else "✗ Not significant (p ≥ 0.05)"
+        )
+
+        # Cohen's d (pooled std)
+        pooled = np.sqrt(
+            ((len(right_rts) - 1) * np.std(right_rts, ddof=1) ** 2 +
+             (len(left_rts)  - 1) * np.std(left_rts,  ddof=1) ** 2) /
+            (len(right_rts) + len(left_rts) - 2)
+        )
+        d = float(abs(sr["mean"] - sl["mean"]) / pooled) if pooled > 0 else 0.0
+        eff_cls = (
+            "Negligible" if d < 0.2 else
+            "Small"      if d < 0.5 else
+            "Medium"     if d < 0.8 else
+            "Large"
+        )
+
+        # Summary values
+        faster   = "Right" if sr["mean"] < sl["mean"] else "Left"
+        diff_ms  = abs(sr["mean"] - sl["mean"])
+        pct_diff = diff_ms / min(sr["mean"], sl["mean"]) * 100
+
+        def _sw_str(st, pv, normal):
+            if st is None:
+                return "n < 3 — test skipped"
+            flag = "Normal ✓" if normal else "Not Normal ✗"
+            return f"W = {st:.3f},  p = {pv:.3f}  →  {flag}"
+
+        # Table rows: (is_section_header, metric_label, value)
+        _ROWS = [
+            (True,  "Normality Tests (Shapiro-Wilk)", ""),
+            (False, "Right Hand", _sw_str(sw_r_s, sw_r_p, r_norm)),
+            (False, "Left Hand",  _sw_str(sw_l_s, sw_l_p, l_norm)),
+            (True,  "Hypothesis Test", ""),
+            (False, "Test Used",       test_name),
+            (False, "Test Statistic",  f"{ts:.4f}"  if not np.isnan(ts)   else "N/A"),
+            (False, "p-value",         f"{pv_t:.4f}" if not np.isnan(pv_t) else "N/A"),
+            (False, "Significant?",    sig_str),
+            (True,  "Effect Size", ""),
+            (False, "Cohen's d",       f"{d:.3f}"),
+            (False, "Classification",  eff_cls  + "  (0.2 small | 0.5 medium | 0.8 large)"),
+            (True,  "Hand Dominance Speed Assessment", ""),
+            (False, "Faster Hand",     f"{faster} Hand  ({min(sr['mean'], sl['mean']):.0f} ms mean RT)"),
+            (False, "Mean Difference", f"{diff_ms:.0f} ms"),
+            (False, "% Difference",    f"{pct_diff:.1f}%"),
+            (False, "Significance",    sig_str),
+            (False, "Effect Size",     f"{d:.3f}  →  {eff_cls}"),
+        ]
+
+        _SEC  = "#dfe6e9"   # section header row fill
+        _DA   = "#f8f9fa"
+        _DB   = "#ffffff"
+        m_col = ["<b>" + r[1] + "</b>" if r[0] else r[1] for r in _ROWS]
+        v_col = [r[2] for r in _ROWS]
+        fills = [_SEC if r[0] else (_DA if i % 2 == 0 else _DB) for i, r in enumerate(_ROWS)]
+
+        fig.add_trace(go.Table(
+            header=dict(
+                values=["<b>Category / Metric</b>", "<b>Result</b>"],
+                fill_color=_HDR, font=dict(color="white", size=12), align="left",
+            ),
+            cells=dict(
+                values=[m_col, v_col],
+                fill_color=[fills, fills],
+                align="left",
+                font=dict(size=11), height=24,
+            ),
+        ), row=3, col=1)
+
+    fig.update_layout(
+        title="Reaction Time Normal Distribution Analysis",
+        template="plotly_white",
+        height=1050,
+        showlegend=True,
+        legend=dict(x=0.72, y=0.99, bgcolor="rgba(255,255,255,0.85)"),
+        margin=dict(t=80, b=20),
+    )
+    return fig
+
+
 def make_accuracy_chart(events: list) -> go.Figure:
     hits = {i: 0 for i in range(9)}
     totals = {i: 0 for i in range(9)}

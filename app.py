@@ -20,6 +20,7 @@ from src.visualizer import (
     make_motor_age_gauge,
     make_quality_chart,
     make_speed_chart,
+    make_speed_normal_dist_chart,
     make_summary_markdown,
 )
 
@@ -63,7 +64,7 @@ def handle_stop(state: GameState):
 
 # ─── Game-over polling ────────────────────────────────────────────────────────
 
-_NO_UPDATE_COUNT = 17   # number of outputs in check_game_over
+_NO_UPDATE_COUNT = 18   # number of outputs in check_game_over
 
 
 def check_game_over(state: GameState):
@@ -84,6 +85,7 @@ def check_game_over(state: GameState):
     analysis      = MotionAnalyzer().analyze(state)
     summary_md    = make_summary_markdown(analysis, state)
     speed_fig     = make_speed_chart(state.events)
+    speed_nd_fig  = make_speed_normal_dist_chart(state.events)
     acc_fig       = make_accuracy_chart(state.events)
     qual_fig      = make_quality_chart(state.events, analysis)
     dom_fig       = make_dominance_chart(analysis)
@@ -97,6 +99,7 @@ def check_game_over(state: GameState):
         analysis,
         summary_md,
         speed_fig,
+        speed_nd_fig,
         acc_fig,
         qual_fig,
         dom_fig,
@@ -188,6 +191,7 @@ with gr.Blocks(title="Upper Limb Dexterity Assessment") as demo:
                     motor_age_plot = gr.Plot(label="Motor Age Estimate")
             with gr.Tab("Speed"):
                 speed_plot = gr.Plot()
+                speed_normal_dist_plot = gr.Plot(label="Reaction Time Normal Distribution Analysis")
             with gr.Tab("Accuracy"):
                 accuracy_plot = gr.Plot()
             with gr.Tab("Movement Quality"):
@@ -243,6 +247,7 @@ with gr.Blocks(title="Upper Limb Dexterity Assessment") as demo:
             analysis_res,
             summary_md,
             speed_plot,
+            speed_normal_dist_plot,
             accuracy_plot,
             quality_plot,
             dominance_plot,
